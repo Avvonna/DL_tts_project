@@ -140,7 +140,9 @@ class BaseDataset(Dataset):
                 scale_factor=self.target_sr / sr,
                 mode="linear",
                 align_corners=False,
-            ).squeeze(0)  # (1, T)
+            ).squeeze(
+                0
+            )  # (1, T)
 
         return audio_tensor
 

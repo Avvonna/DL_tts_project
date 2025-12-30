@@ -12,12 +12,12 @@ class CustomDirDataset(BaseDataset):
 
     Ожидаемая структура папки:
 
-    root_dir  
-    ├── audio  
-    │   ├── UtteranceID1.wav (или .flac/.mp3/.m4a)  
-    │   └── ...  
-    └── transcriptions (необязательно)  
-        ├── UtteranceID1.txt  
+    root_dir
+    ├── audio
+    │   ├── UtteranceID1.wav (или .flac/.mp3/.m4a)
+    │   └── ...
+    └── transcriptions (необязательно)
+        ├── UtteranceID1.txt
         └── ...
 
     Идея:
@@ -27,7 +27,7 @@ class CustomDirDataset(BaseDataset):
       - если require_text=False, то текст не обязателен (тогда метрики обычно не считаются)
     """
 
-    AUDIO_EXTS = {".wav", ".flac", ".mp3", ".m4a"}
+    AUDIO_EXTS = {".wav", ".flac", ".mp3"}
 
     def __init__(
         self,
@@ -81,7 +81,6 @@ class CustomDirDataset(BaseDataset):
         trans_path: Optional[Path],
         require_text: bool,
     ) -> List[Dict[str, Any]]:
-
         if not audio_path.exists() or not audio_path.is_dir():
             raise FileNotFoundError(f"audio directory does not exist: {audio_path}")
 
