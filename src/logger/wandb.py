@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 
 import numpy as np
 import pandas as pd
@@ -19,7 +20,7 @@ class WandBWriter:
         entity=None,
         run_id=None,
         run_name=None,
-        mode="online",
+        mode: Literal["online", "offline", "disabled", "shared"] | None = "online",
         **kwargs,
     ):
         """
@@ -77,16 +78,7 @@ class WandBWriter:
             mode (str): current mode (partition name).
         """
         self.mode = mode
-        previous_step = self.step
-        self.step = step
-        if step == 0:
-            self.timer = datetime.now()
-        else:
-            duration = datetime.now() - self.timer
-            self.add_scalar(
-                "steps_per_sec", (self.step - previous_step) / duration.total_seconds()
-            )
-            self.timer = datetime.now()
+        self.step = int(step)
 
     def _object_name(self, object_name):
         """
@@ -196,10 +188,13 @@ class WandBWriter:
             hist_name (str): name of the histogram to use in the tracker.
             values_for_hist (Tensor): array of values to calculate
                 histogram of.
-            bins (int | str): the definition of bins for the histogram.
+            bins (int | None): the definition of bins for the histogram.
         """
         values_for_hist = values_for_hist.detach().cpu().numpy()
-        np_hist = np.histogram(values_for_hist, bins=bins)
+        if bins:
+            np_hist = np.histogram(values_for_hist, bins=bins)
+        else:
+            np_hist = np.histogram(values_for_hist)
         if np_hist[0].shape[0] > 512:
             np_hist = np.histogram(values_for_hist, bins=512)
 

@@ -1,134 +1,243 @@
 import logging
 import random
-from typing import List
+from typing import Any, Callable, Dict, List, Optional
 
+import numpy as np
+import soundfile as sf
 import torch
 from torch.utils.data import Dataset
+
+from src.text_encoder import CTCTextEncoder
 
 logger = logging.getLogger(__name__)
 
 
 class BaseDataset(Dataset):
     """
-    Base class for the datasets.
+    Base class for ASR datasets.
 
     Given a proper index (list[dict]), allows to process different datasets
     for the same task in the identical manner. Therefore, to work with
     several datasets, the user only have to define index in a nested class.
+
+    Supported index fields per item:
+    - path: str (required)
+    - text: str (optional, can be absent for inference)
+    - audio_len: float seconds (optional, will be computed if absent and needed)
     """
 
     def __init__(
-        self, index, limit=None, shuffle_index=False, instance_transforms=None
+        self,
+        index: List[Dict[str, Any]],
+        text_encoder=None,
+        target_sr: int = 16000,
+        limit: Optional[int] = None,
+        max_audio_length: Optional[float] = None,
+        max_text_length: Optional[int] = None,
+        shuffle_index: bool = False,
+        instance_transforms: Optional[Dict[str, Callable]] = None,
+        require_text: bool = True,
+        compute_audio_len_if_missing: bool = True,
     ):
         """
         Args:
             index (list[dict]): list, containing dict for each element of
                 the dataset. The dict has required metadata information,
                 such as label and object path.
+            text_encoder (CTCTextEncoder): text encoder.
+            target_sr (int): supported sample rate.
             limit (int | None): if not None, limit the total number of elements
                 in the dataset to 'limit' elements.
+            max_audio_length (int): maximum allowed audio length.
+            max_test_length (int): maximum allowed text length.
             shuffle_index (bool): if True, shuffle the index. Uses python
                 random package with seed 42.
             instance_transforms (dict[Callable] | None): transforms that
                 should be applied on the instance. Depend on the
                 tensor name.
+            require_text (bool): whether the ground truth transcription is required
+            compute_audio_len_if_missing (bool): whether to compute missing audio length
         """
+        self.require_text = require_text
+        self.compute_audio_len_if_missing = compute_audio_len_if_missing
         self._assert_index_is_valid(index)
 
-        index = self._shuffle_and_limit_index(index, limit, shuffle_index)
-        self._index: List[dict] = index
+        if compute_audio_len_if_missing:
+            index = self._ensure_audio_len(index)
 
+        index = self._filter_records_from_dataset(
+            index, max_audio_length, max_text_length
+        )
+        index = self._shuffle_and_limit_index(index, limit, shuffle_index)
+
+        if not shuffle_index:
+            index = self._sort_index(index)
+
+        self._index: List[Dict[str, Any]] = index
+        self.target_sr = target_sr
+
+        if text_encoder is None:
+            raise ValueError("text_encoder cannot be None")
+        if instance_transforms is None:
+            raise ValueError("instance_transforms cannot be None")
+        if "get_spectrogram" not in instance_transforms:
+            raise ValueError("instance_transforms must contain 'get_spectrogram'")
+
+        self.text_encoder = text_encoder
         self.instance_transforms = instance_transforms
 
-    def __getitem__(self, ind):
-        """
-        Get element from the index, preprocess it, and combine it
-        into a dict.
-
-        Notice that the choice of key names is defined by the template user.
-        However, they should be consistent across dataset getitem, collate_fn,
-        loss_function forward method, and model forward method.
-
-        Args:
-            ind (int): index in the self.index list.
-        Returns:
-            instance_data (dict): dict, containing instance
-                (a single dataset element).
-        """
-        data_dict = self._index[ind]
-        data_path = data_dict["path"]
-        data_object = self.load_object(data_path)
-        data_label = data_dict["label"]
-
-        instance_data = {"data_object": data_object, "labels": data_label}
-        instance_data = self.preprocess_data(instance_data)
-
-        return instance_data
-
-    def __len__(self):
-        """
-        Get length of the dataset (length of the index).
-        """
+    def __len__(self) -> int:
         return len(self._index)
 
-    def load_object(self, path):
-        """
-        Load object from disk.
+    def __getitem__(self, ind: int) -> Dict[str, Any]:
+        data_dict = self._index[ind]
 
-        Args:
-            path (str): path to the object.
-        Returns:
-            data_object (Tensor):
-        """
-        data_object = torch.load(path)
-        return data_object
+        audio_path = data_dict["path"]
+        audio = self.load_audio(audio_path)
+        audio_orig = audio
 
-    def preprocess_data(self, instance_data):
-        """
-        Preprocess data with instance transforms.
+        # wave augs
+        if (
+            "audio" in self.instance_transforms
+            and self.instance_transforms["audio"] is not None
+        ):
+            audio = self.instance_transforms["audio"](audio)
 
-        Each tensor in a dict undergoes its own transform defined by the key.
+        # spectrogram
+        spectrogram = self.get_spectrogram(audio)
 
-        Args:
-            instance_data (dict): dict, containing instance
-                (a single dataset element).
-        Returns:
-            instance_data (dict): dict, containing instance
-                (a single dataset element) (possibly transformed via
-                instance transform).
-        """
-        if self.instance_transforms is not None:
-            for transform_name in self.instance_transforms.keys():
-                instance_data[transform_name] = self.instance_transforms[
-                    transform_name
-                ](instance_data[transform_name])
+        # spectrogram augs / postprocessing
+        if (
+            "spectrogram" in self.instance_transforms
+            and self.instance_transforms["spectrogram"] is not None
+        ):
+            spectrogram = self.instance_transforms["spectrogram"](spectrogram)
+
+        instance_data: Dict[str, Any] = {
+            "audio": audio,
+            "audio_orig": audio_orig,
+            "spectrogram": spectrogram,
+            "audio_path": audio_path,
+        }
+
+        # text is optional
+        text = data_dict.get("text", None)
+        if text is not None:
+            instance_data["text"] = text
+            instance_data["text_encoded"] = self.text_encoder.encode(text)
+
         return instance_data
 
-    @staticmethod
+    def load_audio(self, path: str) -> torch.Tensor:
+        audio_np, sr = sf.read(path, dtype="float32", always_2d=True)
+        audio_np = audio_np[:, 0]  # первый канал
+        audio_tensor = torch.from_numpy(audio_np).unsqueeze(0)  # (1, T)
+
+        if sr != self.target_sr:
+            # linear resampling
+            audio_tensor = torch.nn.functional.interpolate(
+                audio_tensor.unsqueeze(0),  # (1, 1, T)
+                scale_factor=self.target_sr / sr,
+                mode="linear",
+                align_corners=False,
+            ).squeeze(0)  # (1, T)
+
+        return audio_tensor
+
+    def get_spectrogram(self, audio: torch.Tensor) -> torch.Tensor:
+        return self.instance_transforms["get_spectrogram"](audio)
+
+    def _ensure_audio_len(self, index: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        out = []
+        for el in index:
+            if "audio_len" not in el or el["audio_len"] is None:
+                try:
+                    info = sf.info(el["path"])
+                    el = dict(el)
+                    el["audio_len"] = float(info.frames) / float(info.samplerate)
+                except Exception:
+                    el = dict(el)
+                    el["audio_len"] = None
+            out.append(el)
+        return out
+
     def _filter_records_from_dataset(
-        index: list,
-    ) -> list:
+        self,
+        index: List[Dict[str, Any]],
+        max_audio_length: Optional[float],
+        max_text_length: Optional[int],
+    ) -> List[Dict[str, Any]]:
         """
         Filter some of the elements from the dataset depending on
-        some condition.
-
-        This is not used in the example. The method should be called in
-        the __init__ before shuffling and limiting.
+        the desired max_test_length or max_audio_length.
 
         Args:
             index (list[dict]): list, containing dict for each element of
                 the dataset. The dict has required metadata information,
                 such as label and object path.
+            max_audio_length (int): maximum allowed audio length.
+            max_test_length (int): maximum allowed text length.
         Returns:
             index (list[dict]): list, containing dict for each element of
                 the dataset that satisfied the condition. The dict has
                 required metadata information, such as label and object path.
         """
-        # Filter logic
-        pass
+        if len(index) == 0:
+            return index
 
-    @staticmethod
-    def _assert_index_is_valid(index):
+        initial_size = len(index)
+
+        # audio length filter
+        if max_audio_length is not None:
+            audio_lens = np.array(
+                [
+                    el.get("audio_len", None)
+                    if el.get("audio_len", None) is not None
+                    else np.inf
+                    for el in index
+                ],
+                dtype=float,
+            )
+            exceeds_audio_length = audio_lens > float(max_audio_length)
+            _total = int(exceeds_audio_length.sum())
+            if _total > 0:
+                logger.debug(
+                    f"{_total} ({_total / initial_size:.1%}) records are longer than "
+                    f"{max_audio_length} seconds. Excluding them."
+                )
+        else:
+            exceeds_audio_length = np.zeros(len(index), dtype=bool)
+
+        # text length filter
+        if max_text_length is not None:
+            text_lens = []
+            for el in index:
+                txt = el.get("text", None)
+                if txt is None:
+                    text_lens.append(0)  # keep items without text
+                else:
+                    text_lens.append(len(CTCTextEncoder.normalize_text(txt)))
+            exceeds_text_length = np.array(text_lens, dtype=int) > int(max_text_length)
+            _total = int(exceeds_text_length.sum())
+            if _total > 0:
+                logger.debug(
+                    f"{_total} ({_total / initial_size:.1%}) records are longer than "
+                    f"{max_text_length} characters. Excluding them."
+                )
+        else:
+            exceeds_text_length = np.zeros(len(index), dtype=bool)
+
+        records_to_filter = exceeds_text_length | exceeds_audio_length
+        if records_to_filter.any():
+            _total = int(records_to_filter.sum())
+            index = [el for el, exclude in zip(index, records_to_filter) if not exclude]
+            logger.debug(
+                f"Filtered {_total} ({_total / initial_size:.1%}) records from dataset"
+            )
+
+        return index
+
+    def _assert_index_is_valid(self, index: List[Dict[str, Any]]) -> None:
         """
         Check the structure of the index and ensure it satisfies the desired
         conditions.
@@ -139,21 +248,16 @@ class BaseDataset(Dataset):
                 such as label and object path.
         """
         for entry in index:
-            assert "path" in entry, (
-                "Each dataset item should include field 'path'" " - path to audio file."
-            )
-            assert "label" in entry, (
-                "Each dataset item should include field 'label'"
-                " - object ground-truth label."
-            )
+            assert "path" in entry, "Each dataset item must include field 'path'."
+            if self.require_text:
+                assert (
+                    "text" in entry
+                ), "Each dataset item must include field 'text' (ground truth transcription)."
 
     @staticmethod
-    def _sort_index(index):
+    def _sort_index(index: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
-        Sort index via some rules.
-
-        This is not used in the example. The method should be called in
-        the __init__ before shuffling and limiting and after filtering.
+        Sort index by audio length.
 
         Args:
             index (list[dict]): list, containing dict for each element of
@@ -164,10 +268,19 @@ class BaseDataset(Dataset):
                 of the dataset. The dict has required metadata information,
                 such as label and object path.
         """
-        return sorted(index, key=lambda x: x["KEY_FOR_SORTING"])
+        # sort only if audio_len exists for all items
+        if len(index) == 0:
+            return index
+        if all(("audio_len" in el) and (el["audio_len"] is not None) for el in index):
+            return sorted(index, key=lambda x: x["audio_len"])
+        return index
 
     @staticmethod
-    def _shuffle_and_limit_index(index, limit, shuffle_index):
+    def _shuffle_and_limit_index(
+        index: List[Dict[str, Any]],
+        limit: Optional[int],
+        shuffle_index: bool,
+    ) -> List[Dict[str, Any]]:
         """
         Shuffle elements in index and limit the total number of elements.
 
@@ -183,7 +296,6 @@ class BaseDataset(Dataset):
         if shuffle_index:
             random.seed(42)
             random.shuffle(index)
-
         if limit is not None:
-            index = index[:limit]
+            index = index[: int(limit)]
         return index

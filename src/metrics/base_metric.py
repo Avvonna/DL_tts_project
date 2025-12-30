@@ -14,7 +14,7 @@ class BaseMetric:
         self.name = name if name is not None else type(self).__name__
 
     @abstractmethod
-    def __call__(self, **batch):
+    def __call__(self, *args, **batch):
         """
         Defines metric calculation logic for a given batch.
         Can use external functions (like TorchMetrics) or custom ones.

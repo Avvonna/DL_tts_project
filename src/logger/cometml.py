@@ -1,6 +1,5 @@
 from datetime import datetime
 
-import numpy as np
 import pandas as pd
 
 
@@ -96,16 +95,7 @@ class CometMLWriter:
             mode (str): current mode (partition name).
         """
         self.mode = mode
-        previous_step = self.step
-        self.step = step
-        if step == 0:
-            self.timer = datetime.now()
-        else:
-            duration = datetime.now() - self.timer
-            self.add_scalar(
-                "steps_per_sec", (self.step - previous_step) / duration.total_seconds()
-            )
-            self.timer = datetime.now()
+        self.step = int(step)
 
     def _object_name(self, object_name):
         """
