@@ -22,8 +22,8 @@ def collate_fn(dataset_items: list[dict]) -> dict:
     batch: dict = {}
 
     # Спектрограммы: приводим к [F, T], паддим по времени
-    spectrograms_t_first = []   # сюда складываем [T, F], так удобнее pad_sequence
-    spectrogram_lengths = []    # реальные длины по времени (до паддинга)
+    spectrograms_t_first = []  # сюда складываем [T, F], так удобнее pad_sequence
+    spectrogram_lengths = []  # реальные длины по времени (до паддинга)
 
     for item in dataset_items:
         spec = item["spectrogram"]
@@ -34,7 +34,9 @@ def collate_fn(dataset_items: list[dict]) -> dict:
 
         # тут ожидаем ровно 2 измерения
         if spec.dim() != 2:
-            raise ValueError(f"Spectrogram должен быть [F,T], а пришло {tuple(spec.shape)}")
+            raise ValueError(
+                f"Spectrogram должен быть [F,T], а пришло {tuple(spec.shape)}"
+            )
 
         # pad_sequence паддит по первой оси, поэтому делаем [T, F]
         spec_tf = spec.transpose(0, 1)
@@ -47,8 +49,10 @@ def collate_fn(dataset_items: list[dict]) -> dict:
             spectrogram_lengths.append(spec_tf.shape[0])
 
     # паддим до максимальной длины по времени
-    padded_tf = pad_sequence(spectrograms_t_first, batch_first=True, padding_value=0.0)  # [B, Tmax, F]
-    batch["spectrogram"] = padded_tf.transpose(1, 2).contiguous()                        # [B, F, Tmax]
+    padded_tf = pad_sequence(
+        spectrograms_t_first, batch_first=True, padding_value=0.0
+    )  # [B, Tmax, F]
+    batch["spectrogram"] = padded_tf.transpose(1, 2).contiguous()  # [B, F, Tmax]
     batch["spectrogram_length"] = torch.tensor(spectrogram_lengths, dtype=torch.long)
 
     # Пути до аудио
@@ -80,12 +84,16 @@ def collate_fn(dataset_items: list[dict]) -> dict:
                 te = te.squeeze(0)
 
             if te.dim() != 1:
-                raise ValueError(f"text_encoded должен быть [L], а пришло {tuple(te.shape)}")
+                raise ValueError(
+                    f"text_encoded должен быть [L], а пришло {tuple(te.shape)}"
+                )
 
             encoded.append(te)
             encoded_lens.append(te.shape[0])
 
-        batch["text_encoded"] = pad_sequence(encoded, batch_first=True, padding_value=0).contiguous()
+        batch["text_encoded"] = pad_sequence(
+            encoded, batch_first=True, padding_value=0
+        ).contiguous()
         batch["text_encoded_length"] = torch.tensor(encoded_lens, dtype=torch.long)
 
     return batch

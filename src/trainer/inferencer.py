@@ -73,14 +73,16 @@ class Inferencer:
             self._from_pretrained(self.cfg_inf.get("from_pretrained"))
 
         # decoding config
-        self.decode_type = str(
-            self.cfg_inf.get("decode_type", "greedy")
-        )  # "greedy" | "beam"
-        self.beam_size = int(self.cfg_inf.get("beam_size", 10))
-        tpt = self.cfg_inf.get("topk_per_timestep", 20)
+        decoding_cfg = self.config.get("decoding", {})
+
+        self.decode_type = str(decoding_cfg.get("decode_type", "greedy"))  # "greedy" | "beam"
+        self.beam_size = int(decoding_cfg.get("beam_size", 10))
+
+        tpt = decoding_cfg.get("topk_per_timestep", None)
         self.topk_per_timestep = int(tpt) if tpt is not None else None
-        self.beam_threshold = float(self.cfg_inf.get("beam_threshold", 70.0))
-        self.save_both_decodes = bool(self.cfg_inf.get("save_both_decodes", False))
+
+        self.beam_threshold = float(decoding_cfg.get("beam_threshold", 70.0))
+        self.save_both_decodes = bool(decoding_cfg.get("save_both_decodes", False))
 
     def run_inference(self) -> Dict[str, Dict[str, float]]:
         part_logs: Dict[str, Dict[str, float]] = {}
@@ -137,7 +139,6 @@ class Inferencer:
             else:
                 pred_texts = pred_greedy
 
-            pred_texts = batch["pred_text"]
             bsz = len(pred_texts)
 
             utt_ids = self._get_utt_ids(batch, default_start=sample_global_idx, bsz=bsz)
@@ -252,7 +253,7 @@ class Inferencer:
 
     def _from_pretrained(self, pretrained_path):
         pretrained_path = str(pretrained_path)
-        checkpoint = torch.load(pretrained_path, map_location=self.device)
+        checkpoint = torch.load(pretrained_path, map_location=self.device, weights_only=False)
         state = (
             checkpoint["state_dict"]
             if isinstance(checkpoint, dict) and "state_dict" in checkpoint

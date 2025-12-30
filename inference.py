@@ -1,5 +1,5 @@
 import warnings
-
+from pathlib import Path
 import hydra
 import torch
 from hydra.utils import instantiate
@@ -49,7 +49,12 @@ def main(config):
         )
 
     # save_path for model predictions
-    save_path = ROOT_PATH / "data" / "saved" / config.inferencer.save_path
+    base_dir = ROOT_PATH / "data" / "saved"
+    cfg_path = Path(config.inferencer.save_path)
+
+    # Если путь абсолютный, сохраняем туда,
+    # иначе создаем поддерикторию в data\saved
+    save_path = cfg_path if cfg_path.is_absolute() else (base_dir / cfg_path)
     save_path.mkdir(exist_ok=True, parents=True)
 
     inferencer = Inferencer(

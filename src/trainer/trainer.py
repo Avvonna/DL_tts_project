@@ -104,7 +104,7 @@ class Trainer(BaseTrainer):
 
         log_probs_length_cpu = log_probs_length.detach().cpu().tolist()
         log_probs_cpu = log_probs.detach().cpu()
-        
+
         limit = min(len(log_probs_cpu), examples_to_log)
 
         # Argmax (всегда)
@@ -123,11 +123,11 @@ class Trainer(BaseTrainer):
                 lp = log_probs_cpu[i, :L]
                 beam_texts.append(
                     self.text_encoder.ctc_beam_search(
-                        lp, 
+                        lp,
                         beam_size=beam_size,
                         topk_per_timestep=topk,
                         beam_threshold=threshold,
-                        input_type="log_probs"
+                        input_type="log_probs",
                     )
                 )
 
@@ -141,7 +141,7 @@ class Trainer(BaseTrainer):
         for i in range(limit):
             target = self.text_encoder.normalize_text(text[i])
             pred_argmax = argmax_texts[i]
-            
+
             wer_argmax = calc_wer(target, pred_argmax) * 100
             cer_argmax = calc_cer(target, pred_argmax) * 100
 

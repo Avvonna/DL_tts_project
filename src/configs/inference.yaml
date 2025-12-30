@@ -10,6 +10,7 @@ decoding:
   beam_size: 20
   topk_per_timestep: 50
   beam_threshold: 100.0
+  save_both_decodes: false
 
 text_encoder:
   _target_: src.text_encoder.CTCTextEncoder

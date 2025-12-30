@@ -342,7 +342,9 @@ class BaseTrainer(ABC):
 
         return self.evaluation_metrics.result()
 
-    def _monitor_performance(self, logs: Dict[str, float | int], not_improved_count: int):
+    def _monitor_performance(
+        self, logs: Dict[str, float | int], not_improved_count: int
+    ):
         """
         Check if there is an improvement in the metrics. Used for early
         stopping and saving the best checkpoint.
