@@ -1,72 +1,70 @@
+from __future__ import annotations
+
 import pandas as pd
 
 
 class MetricTracker:
     """
-    Class to aggregate metrics from many batches.
+    Aggregates metrics across many batches.
+
+    Supports two scopes:
+      - epoch: cumulative for the whole epoch
+      - window: cumulative since last reset_window()
     """
 
-    def __init__(self, *keys, writer=None):
-        """
-        Args:
-            *keys (list[str]): list (as positional arguments) of metric
-                names (may include the names of losses)
-            writer (WandBWriter | CometMLWriter | None): experiment tracker.
-                Not used in this code version. Can be used to log metrics
-                from each batch.
-        """
+    def __init__(self, *keys: str, writer=None):
         self.writer = writer
-        self._data = pd.DataFrame(index=keys, columns=["total", "counts", "average"])
+        self._data = pd.DataFrame(
+            index=list(keys),
+            columns=[
+                "total",
+                "counts",
+                "average",  # epoch
+                "w_total",
+                "w_counts",
+                "w_average",  # window
+            ],
+        )
         self.reset()
 
     def reset(self):
-        """
-        Reset all metrics after epoch end.
-        """
+        """Reset both epoch and window accumulators."""
         for col in self._data.columns:
             self._data[col].values[:] = 0
 
-    def update(self, key, value, n=1):
-        """
-        Update metrics DataFrame with new value.
+    def reset_window(self):
+        """Reset only window accumulators."""
+        for col in ["w_total", "w_counts", "w_average"]:
+            self._data[col].values[:] = 0
 
-        Args:
-            key (str): metric name.
-            value (float): metric value on the batch.
-            n (int): how many times to count this value.
-        """
-        # if self.writer is not None:
-        #     self.writer.add_scalar(key, value)
-        self._data.loc[key, "total"] += value * n
-        self._data.loc[key, "counts"] += n
+    def update(self, key: str, value: float, n: int = 1):
+        # epoch
+        self._data.loc[key, "total"] += value * n  # type: ignore
+        self._data.loc[key, "counts"] += n  # type: ignore
         self._data.loc[key, "average"] = self._data.total[key] / self._data.counts[key]
 
-    def avg(self, key):
-        """
-        Return average value for a given metric.
+        # window
+        self._data.loc[key, "w_total"] += value * n  # type: ignore
+        self._data.loc[key, "w_counts"] += n  # type: ignore
+        self._data.loc[key, "w_average"] = (
+            self._data.w_total[key] / self._data.w_counts[key]
+        )
 
-        Args:
-            key (str): metric name.
-        Returns:
-            average_value (float): average value for the metric.
-        """
-        return self._data.average[key]
+    def avg(self, key: str) -> float:
+        """Epoch average."""
+        return float(self._data.average[key])
 
-    def result(self):
-        """
-        Return average value of each metric.
+    def avg_window(self, key: str) -> float:
+        """Window average (since last reset_window)."""
+        return float(self._data.w_average[key])
 
-        Returns:
-            average_metrics (dict): dict, containing average metrics
-                for each metric name.
-        """
-        return dict(self._data.average)
+    def result(self) -> dict[str, float]:
+        """Epoch averages for all metrics."""
+        return {k: float(v) for k, v in self._data["average"].to_dict().items()}
+
+    def result_window(self) -> dict[str, float]:
+        """Window averages for all metrics."""
+        return {k: float(v) for k, v in self._data["w_average"].to_dict().items()}
 
     def keys(self):
-        """
-        Return all metric names defined in the MetricTracker.
-
-        Returns:
-            metric_keys (Index): all metric names in the table.
-        """
-        return self._data.total.keys()
+        return self._data.index

@@ -1,0 +1,38 @@
+defaults:
+  - model: baseline
+  - writer: wandb
+  - metrics: asr_argmax
+  - datasets: onebatchtest
+  - dataloader: default
+  - transforms: no_augs
+  - lr_scheduler: one_cycle
+  - _self_
+
+decoding:
+  beam_size: 1            # только Argmax
+  topk_per_timestep: 10
+  beam_threshold: 70.0
+
+optimizer:
+  _target_: torch.optim.AdamW
+  lr: 3e-4
+
+loss_function:
+  _target_: src.loss.CTCLossWrapper
+
+text_encoder:
+  _target_: src.text_encoder.CTCTextEncoder
+
+trainer:
+  log_step: 10
+  n_epochs: 50
+  epoch_len: null         # null = полный проход по датасету
+  device_tensors: ["spectrogram", "text_encoded"]
+  resume_from: null
+  device: auto
+  override: True
+  monitor: "min val_WER_(Argmax)"
+  save_period: 5
+  early_stop: 50
+  save_dir: "saved"
+  seed: 42

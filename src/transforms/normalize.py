@@ -1,30 +1,22 @@
-import torch
 from torch import nn
 
 
 class Normalize1D(nn.Module):
     """
-    Batch-version of Normalize for 1D Input.
-    Used as an example of a batch transform.
+    Normalizes the input tensor (spectrogram) to have zero mean and unit variance.
+    Usually applied per-sample over the time dimension.
     """
 
-    def __init__(self, mean, std):
-        """
-        Args:
-            mean (float): mean used in the normalization.
-            std (float): std used in the normalization.
-        """
+    def __init__(self, mean=0.0, std=1.0):
         super().__init__()
-
         self.mean = mean
         self.std = std
 
     def forward(self, x):
-        """
-        Args:
-            x (Tensor): input tensor.
-        Returns:
-            x (Tensor): normalized tensor.
-        """
-        x = (x - self.mean) / self.std
-        return x
+        # x shape: (Batch, Freq, Time) или (Freq, Time)
+        # Мы нормализуем по временной размерности (последней)
+
+        mean = x.mean(dim=-1, keepdim=True)
+        std = x.std(dim=-1, keepdim=True) + 1e-6  # 1e-6 для стабильности
+
+        return (x - mean) / std * self.std + self.mean

@@ -1,13 +1,24 @@
 defaults:
-  - model: baseline
-  - metrics: example
-  - datasets: example_eval # we do not want to run inference on training data
-  - dataloader: example
-  - transforms: example
+  - model: deepspeech
+  - datasets: custom_dir        # Датасет, который читает папку с аудио
+  - dataloader: default
+  - transforms: no_augs
+  - metrics: asr_beam
   - _self_
+
+decoding:
+  beam_size: 20
+  topk_per_timestep: 50
+  beam_threshold: 100.0
+
+text_encoder:
+  _target_: src.text_encoder.CTCTextEncoder
+
 inferencer:
-  device_tensors: ["data_object", "labels"] # which tensors should be on device (ex. GPU)
-  device: auto # device name or "auto"
-  save_path: "example" # any name here, can be a dataset name
-  seed: 1
-  from_pretrained: "saved/model_best.pth" # path to the pretrained model
+  seed: 42
+  device: auto
+  device_tensors: ["spectrogram"]
+  from_pretrained: null          # Путь к model_best.pth
+  save_path: "inference_outputs" # Куда сохранять predictions.csv / .txt
+  data_dir: null                 # Путь к папке с аудио
+  require_text: false            # True - если есть ground truth (считаем метрики), False - просто предсказываем
