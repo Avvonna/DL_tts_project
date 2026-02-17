@@ -30,14 +30,17 @@ class MetricTracker:
     def reset(self):
         """Reset both epoch and window accumulators."""
         for col in self._data.columns:
-            self._data[col].values[:] = 0
+            self._data.loc[:, col] = 0
 
     def reset_window(self):
         """Reset only window accumulators."""
         for col in ["w_total", "w_counts", "w_average"]:
-            self._data[col].values[:] = 0
+            self._data.loc[:, col] = 0
 
     def update(self, key: str, value: float, n: int = 1):
+        if key not in self._data.index:
+            self._data.loc[key] = [0.0] * len(self._data.columns)
+
         # epoch
         self._data.loc[key, "total"] += value * n  # type: ignore
         self._data.loc[key, "counts"] += n  # type: ignore
@@ -65,6 +68,14 @@ class MetricTracker:
     def result_window(self) -> dict[str, float]:
         """Window averages for all metrics."""
         return {k: float(v) for k, v in self._data["w_average"].to_dict().items()}
+
+    def count(self, key: str) -> int:
+        """Number of updates for this metric in the current epoch."""
+        return int(self._data.counts.get(key, 0))
+
+    def count_window(self, key: str) -> int:
+        """Number of updates for this metric since last reset_window()."""
+        return int(self._data.w_counts.get(key, 0))
 
     def keys(self):
         return self._data.index

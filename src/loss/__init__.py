@@ -1,3 +1,6 @@
-from src.loss.ctc_loss import CTCLossWrapper
+from src.loss.gan_loss import DiscriminatorLoss, GeneratorLoss
 
-__all__ = ["CTCLossWrapper"]
+__all__ = [
+    "DiscriminatorLoss",
+    "GeneratorLoss",
+]

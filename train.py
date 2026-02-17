@@ -1,23 +1,19 @@
-import warnings
-
 import hydra
-import torch
 from hydra.utils import instantiate
 from omegaconf import OmegaConf
 
 from src.datasets.data_utils import get_dataloaders
-from src.trainer import Trainer
+from src.trainer.gan_trainer import GANTrainer
+from src.utils.device import resolve_device
 from src.utils.init_utils import set_random_seed, setup_saving_and_logging
-
-warnings.filterwarnings("ignore", category=UserWarning)
 
 
 @hydra.main(version_base=None, config_path="src/configs", config_name="train")
 def main(config):
     """
-    Main script for training. Instantiates the model, optimizer, scheduler,
-    metrics, logger, writer, and dataloaders. Runs Trainer to train and
-    evaluate the model.
+    Main script for training HiFi-GAN. Instantiates generator, discriminators,
+    optimizers, schedulers, metrics, logger, writer, and dataloaders.
+    Runs GANTrainer to train and evaluate the model.
 
     Args:
         config (DictConfig): hydra experiment config.
@@ -28,55 +24,78 @@ def main(config):
     logger = setup_saving_and_logging(config)
     writer = instantiate(config.writer, logger, project_config)
 
-    if config.trainer.device == "auto":
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-    else:
-        device = config.trainer.device
-
-    # setup text_encoder
-    text_encoder = instantiate(config.text_encoder)
+    device = resolve_device(config.trainer.device)
 
     # setup data_loader instances
-    # batch_transforms should be put on device
-    dataloaders, batch_transforms = get_dataloaders(config, text_encoder, device)
+    dataloaders, batch_transforms = get_dataloaders(
+        config, text_encoder=None, device=device
+    )
 
-    # build model architecture, then print to console
-    model = instantiate(config.model, n_tokens=len(text_encoder)).to(device)
-    logger.info(model)
+    # build model architecture
+    generator = instantiate(config.generator).to(device)
+    mpd = instantiate(config.discriminator.mpd).to(device)
+    msd = instantiate(config.discriminator.msd).to(device)
 
-    # get function handles of loss and metrics
-    loss_function = instantiate(config.loss_function).to(device)
+    logger.info("Generator:")
+    logger.info(generator)
+    logger.info("MPD:")
+    logger.info(mpd)
+    logger.info("MSD:")
+    logger.info(msd)
 
+    # Собираем дискриминаторы в словарь
+    discriminators = {
+        "mpd": mpd,
+        "msd": msd,
+    }
+
+    # get loss functions (criterion - это словарь с generator и discriminator лоссами)
+    criterion = {
+        "generator": instantiate(config.loss.generator).to(device),
+        "discriminator": instantiate(config.loss.discriminator).to(device),
+    }
+
+    # metrics
     metrics = {"train": [], "inference": []}
     for metric_type in ["train", "inference"]:
         for metric_config in config.metrics.get(metric_type, []):
-            # use text_encoder in metrics
-            metrics[metric_type].append(
-                instantiate(metric_config, text_encoder=text_encoder)
-            )
+            metrics[metric_type].append(instantiate(metric_config))
 
-    # build optimizer, learning rate scheduler
-    trainable_params = filter(lambda p: p.requires_grad, model.parameters())
-    optimizer = instantiate(config.optimizer, params=trainable_params)
-    lr_scheduler = instantiate(config.lr_scheduler, optimizer=optimizer)
+    # build optimizers (отдельно для генератора и дискриминаторов)
+    optimizer_g = instantiate(config.optimizer.generator, params=generator.parameters())
+    optimizer_d = instantiate(
+        config.optimizer.discriminator,
+        params=list(mpd.parameters()) + list(msd.parameters()),
+    )
 
-    # epoch_len = number of iterations for iteration-based training
-    # epoch_len = None or len(dataloader) for epoch-based training
+    # learning rate schedulers
+    lr_scheduler_g = instantiate(config.lr_scheduler.generator, optimizer=optimizer_g)
+    lr_scheduler_d = instantiate(
+        config.lr_scheduler.discriminator, optimizer=optimizer_d
+    )
+
+    # mel-spectrogram transform для валидации
+    mel_spec_transform = instantiate(config.mel_spec_transform).to(device)
+
+    # epoch_len для iteration-based training
     epoch_len = config.trainer.get("epoch_len")
 
-    trainer = Trainer(
-        model=model,
-        criterion=loss_function,
+    trainer = GANTrainer(
+        generator=generator,
+        discriminators=discriminators,
+        criterion=criterion,
         metrics=metrics,
-        optimizer=optimizer,
-        lr_scheduler=lr_scheduler,
-        text_encoder=text_encoder,
         config=config,
         device=device,
         dataloaders=dataloaders,
-        epoch_len=epoch_len,
         logger=logger,
         writer=writer,
+        optimizer_g=optimizer_g,
+        optimizer_d=optimizer_d,
+        mel_spec_transform=mel_spec_transform,
+        lr_scheduler_g=lr_scheduler_g,
+        lr_scheduler_d=lr_scheduler_d,
+        epoch_len=epoch_len,
         batch_transforms=batch_transforms,
         skip_oom=config.trainer.get("skip_oom", True),
     )

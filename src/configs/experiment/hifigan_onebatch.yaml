@@ -1,0 +1,25 @@
+# @package _global_
+
+# Версия для отладки
+datasets:
+  train:
+    limit: 8
+  val:
+    limit: 8
+
+dataloader:
+  batch_size: 8
+  num_workers: 0
+  pin_memory: true
+
+trainer:
+  n_epochs: 20
+  epoch_len: 1
+  log_step: 1
+  save_period: 1000000
+  early_stop: 1000000
+  seed: 42
+
+writer:
+  run_name: "HiFiGAN_OneBatch"
+  mode: "online"

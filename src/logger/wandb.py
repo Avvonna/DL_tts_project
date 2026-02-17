@@ -3,6 +3,7 @@ from typing import Literal
 
 import numpy as np
 import pandas as pd
+import torch
 
 
 class WandBWriter:
@@ -142,9 +143,22 @@ class WandBWriter:
 
         Args:
             image_name (str): name of the image to use in the tracker.
-            image (Path | ndarray | Image): image in the WandB-friendly
-                format.
+            image (Path | ndarray | Image | Tensor): image data.
         """
+        if hasattr(image, "detach"):
+            image = image.detach().cpu()
+
+            # Исправление размерности
+            if image.dim() == 2:
+                image = image.unsqueeze(0)
+
+            # Нормализация
+            if image.dtype in (float, torch.float16, torch.float32, torch.float64):
+                min_val = image.min()
+                max_val = image.max()
+                if max_val > min_val:  # защита от деления на 0
+                    image = (image - min_val) / (max_val - min_val)
+
         self.wandb.log(
             {self._object_name(image_name): self.wandb.Image(image)}, step=self.step
         )
@@ -155,14 +169,20 @@ class WandBWriter:
 
         Args:
             audio_name (str): name of the audio to use in the tracker.
-            audio (Path | ndarray): audio in the WandB-friendly format.
+            audio (torch.Tensor): audio to log.
             sample_rate (int): audio sample rate.
         """
-        audio = audio.detach().cpu().numpy().T
+        a = audio.detach().cpu()
+        if a.ndim == 2 and a.shape[0] == 1:  # (1, T) -> (T,)
+            a = a.squeeze(0)
+        a = a.numpy()
+        if a.ndim == 2 and a.shape[0] < a.shape[1]:  # (C, T) -> (T, C)
+            a = a.T
+
         self.wandb.log(
             {
                 self._object_name(audio_name): self.wandb.Audio(
-                    audio, sample_rate=sample_rate
+                    a, sample_rate=sample_rate
                 )
             },
             step=self.step,

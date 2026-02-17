@@ -46,16 +46,16 @@ def move_batch_transforms_to_device(batch_transforms, device):
                 transforms[transform_name] = transforms[transform_name].to(device)
 
 
-def get_dataloaders(config, text_encoder, device):
+def get_dataloaders(config, text_encoder=None, device=None):
     """
     Create dataloaders for each of the dataset partitions.
     Also creates instance and batch transforms.
 
     Args:
         config (DictConfig): hydra experiment config.
-        text_encoder (CTCTextEncoder): instance of the text encoder
-            for the datasets.
-        device (str): device to use for batch transforms.
+        text_encoder (CTCTextEncoder | None): instance of the text encoder
+            for the datasets. Legacy, not used for GANs.
+        device (str | None): device to use for batch transforms.
     Returns:
         dataloaders (dict[DataLoader]): dict containing dataloader for a
             partition defined by key.
@@ -67,22 +67,26 @@ def get_dataloaders(config, text_encoder, device):
     batch_transforms = instantiate(config.transforms.batch_transforms)
     move_batch_transforms_to_device(batch_transforms, device)
 
-    # dataloaders init
     dataloaders = {}
     for dataset_partition in config.datasets.keys():
-        # dataset partition init
-        dataset = instantiate(
-            config.datasets[dataset_partition], text_encoder=text_encoder
-        )  # instance transforms are defined inside
+        if text_encoder is not None:
+            dataset = instantiate(
+                config.datasets[dataset_partition], text_encoder=text_encoder
+            )
+        else:
+            dataset = instantiate(config.datasets[dataset_partition])
 
         if dataset_partition == "train":
-            assert config.dataloader.batch_size <= len(dataset), (
-                f"The batch size ({config.dataloader.batch_size}) cannot "
-                f"be larger than the dataset length ({len(dataset)})"
-            )
+            assert config.dataloader.train.batch_size <= len(dataset)
+
+        dl_cfg = (
+            config.dataloader.train
+            if dataset_partition == "train"
+            else config.dataloader.val
+        )
 
         partition_dataloader = instantiate(
-            config.dataloader,
+            dl_cfg,
             dataset=dataset,
             collate_fn=collate_fn,
             drop_last=(dataset_partition == "train"),

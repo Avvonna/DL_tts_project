@@ -1,8 +1,0 @@
-_target_: torch.nn.Sequential
-_args_:
-  - _target_: src.transforms.spec_augs.masking.FrequencyMasking
-    p: 0.3
-    freq_mask_param: 20
-  - _target_: src.transforms.spec_augs.masking.TimeMasking
-    p: 0.3
-    time_mask_param: 50

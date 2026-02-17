@@ -1,8 +1,0 @@
-inference:
-  _target_: src.datasets.CustomDirDataset
-  data_dir: ${inferencer.data_dir}
-  require_text: ${inferencer.require_text}
-  max_audio_length: null
-  max_text_length: null
-  limit: null
-  instance_transforms: ${transforms.instance_transforms.inference}

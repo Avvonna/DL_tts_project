@@ -1,0 +1,17 @@
+# @package _global_
+
+# Маленькая версия
+generator:
+  upsample_initial_channel: 256
+  resblock_kernel_sizes: [3, 7]
+  resblock_dilation_sizes: [[1, 3, 5], [1, 3, 5]]
+
+trainer:
+  n_epochs: 100
+  epoch_len: 500
+  log_step: 50
+  save_period: 10
+  seed: 42
+
+writer:
+  run_name: "HiFiGAN_Small"

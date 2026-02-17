@@ -1,20 +1,24 @@
+import json
 import logging
 import random
-from typing import Any, Callable, Dict, List, Optional
+from pathlib import Path
+from typing import Any, Optional
 
-import numpy as np
 import soundfile as sf
 import torch
+import torch.nn.functional as F
+import torchaudio
 from torch.utils.data import Dataset
+from tqdm.auto import tqdm
 
-from src.text_encoder import CTCTextEncoder
+from src.transforms.mel_spectrogram import MelSpectrogram, MelSpectrogramConfig
 
 logger = logging.getLogger(__name__)
 
 
 class BaseDataset(Dataset):
     """
-    Base class for ASR datasets.
+    Base class for TTS datasets.
 
     Given a proper index (list[dict]), allows to process different datasets
     for the same task in the identical manner. Therefore, to work with
@@ -28,261 +32,317 @@ class BaseDataset(Dataset):
 
     def __init__(
         self,
-        index: List[Dict[str, Any]],
-        text_encoder=None,
-        target_sr: int = 16000,
+        index: list[dict[str, Any]],
+        target_sr: int = 22050,
         limit: Optional[int] = None,
         max_audio_length: Optional[float] = None,
-        max_text_length: Optional[int] = None,
+        min_audio_length: Optional[float] = None,
         shuffle_index: bool = False,
-        instance_transforms: Optional[Dict[str, Callable]] = None,
-        require_text: bool = True,
-        compute_audio_len_if_missing: bool = True,
-    ):
+        random_crop: bool = False,
+        cache_dir: Optional[str] = None,
+        # Параметры для mel-спектрограммы
+        compute_mel: bool = False,
+        n_fft: int = 1024,
+        hop_length: int = 256,
+        n_mels: int = 80,
+        f_min: float = 0.0,
+        f_max: float = 8000.0,
+        segment_size: Optional[int] = None,
+    ) -> None:
         """
         Args:
-            index (list[dict]): list, containing dict for each element of
-                the dataset. The dict has required metadata information,
-                such as label and object path.
-            text_encoder (CTCTextEncoder): text encoder.
-            target_sr (int): supported sample rate.
-            limit (int | None): if not None, limit the total number of elements
-                in the dataset to 'limit' elements.
-            max_audio_length (int): maximum allowed audio length.
-            max_test_length (int): maximum allowed text length.
-            shuffle_index (bool): if True, shuffle the index. Uses python
-                random package with seed 42.
-            instance_transforms (dict[Callable] | None): transforms that
-                should be applied on the instance. Depend on the
-                tensor name.
-            require_text (bool): whether the ground truth transcription is required
-            compute_audio_len_if_missing (bool): whether to compute missing audio length
+            index (list[dict]): List containing dict for each element of the dataset.
+                Must contain 'path'.
+            target_sr (int): Target sample rate for audio.
+            limit (int | None): If not None, limit the total number of elements.
+            max_audio_length (float | None): Maximum allowed audio length in seconds.
+            min_audio_length (float | None): Minimum allowed audio length in seconds.
+            shuffle_index (bool): If True, shuffle the index (seed 42).
+            cache_dir (str | Path | None): Directory to store audio lengths cache.
+            compute_mel (bool): If True, compute and return mel spectrogram.
+            n_fft (int): Size of FFT, creates n_fft // 2 + 1 bins.
+            hop_length (int): Length of hop between STFT windows.
+            n_mels (int): Number of mel filterbanks.
+            f_min (float): Minimum frequency.
+            f_max (float): Maximum frequency.
+            segment_size (int | None): Length of the returned segment (in samples)
         """
-        self.require_text = require_text
-        self.compute_audio_len_if_missing = compute_audio_len_if_missing
+        self.target_sr = int(target_sr)
+        self.cache_dir = Path(cache_dir) if cache_dir else None
+        self._resamplers: dict[int, torchaudio.transforms.Resample] = {}
+
+        self.segment_size = segment_size
+        self.shuffle_index = bool(shuffle_index)
+        self.random_crop = bool(random_crop)
+
+        # Mel transform
+        self.mel_transform = None
+        if compute_mel:
+            cfg = MelSpectrogramConfig(
+                sr=self.target_sr,
+                n_fft=n_fft,
+                hop_length=hop_length,
+                win_length=n_fft,
+                n_mels=n_mels,
+                f_min=f_min,
+                f_max=f_max,
+                power=1.0,
+                eps=1e-5,
+                mel_scale="slaney",
+                norm="slaney",
+            )
+            self.mel_transform = MelSpectrogram(cfg)
+
         self._assert_index_is_valid(index)
 
-        if compute_audio_len_if_missing:
-            index = self._ensure_audio_len(index)
-
-        index = self._filter_records_from_dataset(
-            index, max_audio_length, max_text_length
+        # Подготовка индекса
+        prepared_index = self.add_audio_lengths(index, cache_dir=self.cache_dir)
+        prepared_index = self.filter_by_audio_len(
+            prepared_index,
+            min_len=min_audio_length,
+            max_len=max_audio_length,
         )
-        index = self._shuffle_and_limit_index(index, limit, shuffle_index)
 
-        if not shuffle_index:
-            index = self._sort_index(index)
+        # shuffle/limit после фильтрации
+        prepared_index = self.shuffle_and_limit(
+            prepared_index,
+            limit=limit,
+            shuffle_index=self.shuffle_index,
+            seed=42,
+        )
 
-        self._index: List[Dict[str, Any]] = index
-        self.target_sr = target_sr
-
-        if text_encoder is None:
-            raise ValueError("text_encoder cannot be None")
-        if instance_transforms is None:
-            raise ValueError("instance_transforms cannot be None")
-        if "get_spectrogram" not in instance_transforms:
-            raise ValueError("instance_transforms must contain 'get_spectrogram'")
-
-        self.text_encoder = text_encoder
-        self.instance_transforms = instance_transforms
+        self._index: list[dict[str, Any]] = prepared_index
 
     def __len__(self) -> int:
         return len(self._index)
 
-    def __getitem__(self, ind: int) -> Dict[str, Any]:
-        data_dict = self._index[ind]
+    def __getitem__(self, ind: int) -> dict[str, Any]:
+        data = self._index[ind]
+        audio_path = data["path"]
 
-        audio_path = data_dict["path"]
-        audio = self.load_audio(audio_path)
-        audio_orig = audio
+        # Загружаем полное аудио
+        audio = self.load_audio(audio_path)  # (1, T)
 
-        # wave augs
-        if (
-            "audio" in self.instance_transforms
-            and self.instance_transforms["audio"] is not None
-        ):
-            audio = self.instance_transforms["audio"](audio)
+        # Кроппинг/паддинг аудио
+        if self.segment_size is not None:
+            audio = self._crop_or_pad_audio(audio)  # (1, target_T)
 
-        # spectrogram
-        spectrogram = self.get_spectrogram(audio)
+        # Вычисляем mel из обработанного аудио
+        mel = None
+        if self.mel_transform is not None:
+            # audio: (1, T) -> mel_transform вернет (1, n_mels, T_mel)
+            mel = self.mel_transform(audio).squeeze(0)  # (n_mels, T_mel)
 
-        # spectrogram augs / postprocessing
-        if (
-            "spectrogram" in self.instance_transforms
-            and self.instance_transforms["spectrogram"] is not None
-        ):
-            spectrogram = self.instance_transforms["spectrogram"](spectrogram)
-
-        instance_data: Dict[str, Any] = {
+        result = {
             "audio": audio,
-            "audio_orig": audio_orig,
-            "spectrogram": spectrogram,
             "audio_path": audio_path,
+            "segment_duration": audio.size(-1) / self.target_sr,
+            **{k: v for k, v in data.items() if k not in {"path", "audio_len"}},
         }
 
-        # text is optional
-        text = data_dict.get("text", None)
-        if text is not None:
-            instance_data["text"] = text
-            instance_data["text_encoded"] = self.text_encoder.encode(text)
+        if mel is not None:
+            result["mel"] = mel
 
-        return instance_data
+        return result
+
+    def _crop_or_pad_audio(self, audio: torch.Tensor) -> torch.Tensor:
+        """
+        Режет или паддит аудио до segment_size.
+        audio: (1, T)
+        returns: (1, segment_size)
+        """
+        if self.segment_size is None:
+            return audio
+
+        T = int(audio.size(-1))
+        target_T = int(self.segment_size)
+
+        # Если короче - паддим
+        if T < target_T:
+            padding_size = target_T - T
+            audio = F.pad(audio, (0, padding_size), mode="constant", value=0.0)
+            return audio
+
+        # Если длиннее - режем
+        if T > target_T:
+            if self.random_crop:  # train: случайный кроп
+                start = random.randint(0, T - target_T)
+            else:  # val: начало
+                start = 0
+            audio = audio[:, start : start + target_T]
+
+        return audio
 
     def load_audio(self, path: str) -> torch.Tensor:
-        audio_np, sr = sf.read(path, dtype="float32", always_2d=True)
-        audio_np = audio_np[:, 0]  # первый канал
-        audio_tensor = torch.from_numpy(audio_np).unsqueeze(0)  # (1, T)
+        try:
+            audio_np, sr = sf.read(
+                path,
+                dtype="float32",
+                always_2d=True,
+            )
+        except Exception as e:
+            raise RuntimeError(f"Ошибка загрузки аудио: {path}") from e
 
+        audio = torch.from_numpy(audio_np).transpose(0, 1)  # (C, T)
+
+        # Конвертация в mono
+        if audio.size(0) > 1:
+            audio = audio.mean(dim=0, keepdim=True)
+
+        # Ресэмплинг (с кэшированием ресэмплеров)
         if sr != self.target_sr:
-            # linear resampling
-            audio_tensor = torch.nn.functional.interpolate(
-                audio_tensor.unsqueeze(0),  # (1, 1, T)
-                scale_factor=self.target_sr / sr,
-                mode="linear",
-                align_corners=False,
-            ).squeeze(
-                0
-            )  # (1, T)
+            sr = int(sr)
+            if sr not in self._resamplers:
+                self._resamplers[sr] = torchaudio.transforms.Resample(
+                    orig_freq=sr,
+                    new_freq=self.target_sr,
+                )
+            audio = self._resamplers[sr](audio)
 
-        return audio_tensor
+        # Ограничение амплитуды
+        peak = float(audio.abs().max())
+        if peak > 1.0:
+            audio = audio / peak
 
-    def get_spectrogram(self, audio: torch.Tensor) -> torch.Tensor:
-        return self.instance_transforms["get_spectrogram"](audio)
+        return audio
 
-    def _ensure_audio_len(self, index: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        out = []
-        for el in index:
-            if "audio_len" not in el or el["audio_len"] is None:
-                try:
-                    info = sf.info(el["path"])
-                    el = dict(el)
-                    el["audio_len"] = float(info.frames) / float(info.samplerate)
-                except Exception:
-                    el = dict(el)
-                    el["audio_len"] = None
-            out.append(el)
-        return out
-
-    def _filter_records_from_dataset(
-        self,
-        index: List[Dict[str, Any]],
-        max_audio_length: Optional[float],
-        max_text_length: Optional[int],
-    ) -> List[Dict[str, Any]]:
+    @staticmethod
+    def filter_by_audio_len(
+        index: list[dict[str, Any]],
+        min_len: Optional[float],
+        max_len: Optional[float],
+    ) -> list[dict[str, Any]]:
         """
-        Filter some of the elements from the dataset depending on
-        the desired max_test_length or max_audio_length.
-
-        Args:
-            index (list[dict]): list, containing dict for each element of
-                the dataset. The dict has required metadata information,
-                such as label and object path.
-            max_audio_length (int): maximum allowed audio length.
-            max_test_length (int): maximum allowed text length.
-        Returns:
-            index (list[dict]): list, containing dict for each element of
-                the dataset that satisfied the condition. The dict has
-                required metadata information, such as label and object path.
+        Фильтрует элементы индекса по длительности аудио.
         """
-        if len(index) == 0:
+        if not index:
+            return index
+
+        if not all("audio_len" in item for item in index):
+            logger.warning(
+                "Поле `audio_len` присутствует не у всех элементов. "
+                "Фильтрация по длине пропущена."
+            )
             return index
 
         initial_size = len(index)
+        filtered: list[dict[str, Any]] = []
 
-        # audio length filter
-        if max_audio_length is not None:
-            audio_lens = np.array(
-                [
-                    el.get("audio_len", None)
-                    if el.get("audio_len", None) is not None
-                    else np.inf
-                    for el in index
-                ],
-                dtype=float,
-            )
-            exceeds_audio_length = audio_lens > float(max_audio_length)
-            _total = int(exceeds_audio_length.sum())
-            if _total > 0:
-                logger.debug(
-                    f"{_total} ({_total / initial_size:.1%}) records are longer than "
-                    f"{max_audio_length} seconds. Excluding them."
-                )
-        else:
-            exceeds_audio_length = np.zeros(len(index), dtype=bool)
+        for item in index:
+            length = float(item["audio_len"])
 
-        # text length filter
-        if max_text_length is not None:
-            text_lens = []
-            for el in index:
-                txt = el.get("text", None)
-                if txt is None:
-                    text_lens.append(0)  # keep items without text
-                else:
-                    text_lens.append(len(CTCTextEncoder.normalize_text(txt)))
-            exceeds_text_length = np.array(text_lens, dtype=int) > int(max_text_length)
-            _total = int(exceeds_text_length.sum())
-            if _total > 0:
-                logger.debug(
-                    f"{_total} ({_total / initial_size:.1%}) records are longer than "
-                    f"{max_text_length} characters. Excluding them."
-                )
-        else:
-            exceeds_text_length = np.zeros(len(index), dtype=bool)
+            if min_len is not None and length < float(min_len):
+                continue
+            if max_len is not None and length > float(max_len):
+                continue
 
-        records_to_filter = exceeds_text_length | exceeds_audio_length
-        if records_to_filter.any():
-            _total = int(records_to_filter.sum())
-            index = [el for el, exclude in zip(index, records_to_filter) if not exclude]
-            logger.debug(
-                f"Filtered {_total} ({_total / initial_size:.1%}) records from dataset"
+            filtered.append(item)
+
+        if len(filtered) != initial_size:
+            logger.info(
+                f"Отфильтровано {initial_size - len(filtered)} из "
+                f"{initial_size} элементов по длительности."
             )
 
-        return index
+        return filtered
 
-    def _assert_index_is_valid(self, index: List[Dict[str, Any]]) -> None:
-        """
-        Check the structure of the index and ensure it satisfies the desired
-        conditions.
+    def _assert_index_is_valid(self, index: list[dict[str, Any]]) -> None:
+        """Проверяет корректность индекса датасета."""
+        for i, entry in enumerate(index):
+            if "path" not in entry:
+                raise ValueError(
+                    f"Элемент индекса #{i} не содержит обязательное поле `path`."
+                )
 
-        Args:
-            index (list[dict]): list, containing dict for each element of
-                the dataset. The dict has required metadata information,
-                such as label and object path.
-        """
-        for entry in index:
-            assert "path" in entry, "Each dataset item must include field 'path'."
-            if self.require_text:
-                assert (
-                    "text" in entry
-                ), "Each dataset item must include field 'text' (ground truth transcription)."
+    def _cache_path(self) -> Optional[Path]:
+        """Возвращает путь к файлу кэша."""
+        if self.cache_dir is None:
+            return None
+
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        return self.cache_dir / "audio_lengths_cache.json"
+
+    @classmethod
+    def add_audio_lengths(
+        cls,
+        index: list[dict[str, Any]],
+        cache_dir: Optional[Path] = None,
+    ) -> list[dict[str, Any]]:
+        """Гарантирует наличие поля `audio_len` (секунды) у каждого элемента."""
+        if index and all("audio_len" in item for item in index):
+            return list(index)
+
+        cache_path: Optional[Path] = None
+        if cache_dir is not None:
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            cache_path = cache_dir / "audio_lengths_cache.json"
+
+        # Загружаем кэш
+        cache: dict[str, float] = {}
+        if cache_path is not None and cache_path.exists():
+            try:
+                with open(cache_path, "r", encoding="utf-8") as f:
+                    raw = json.load(f)
+                cache = {str(k): float(v) for k, v in raw.items()}
+            except Exception as e:
+                logger.warning(f"Не удалось загрузить кэш: {e}")
+                cache = {}
+
+        cache_updated = False
+        logger.info("Вычисление длительности аудиофайлов...")
+
+        result: list[dict[str, Any]] = []
+
+        for item in tqdm(index, desc="Сканирование аудио"):
+            new_item = dict(item)
+
+            if "audio_len" in new_item:
+                new_item["audio_len"] = float(new_item["audio_len"])
+                result.append(new_item)
+                continue
+
+            path = str(new_item["path"])
+
+            # Проверяем кэш
+            if path in cache:
+                new_item["audio_len"] = float(cache[path])
+                result.append(new_item)
+                continue
+
+            # Считаем длительность
+            try:
+                info = sf.info(path)
+
+                if info.frames == 0:
+                    logger.warning(f"Пустой аудиофайл пропущен: {path}")
+                    continue
+
+                dur = float(info.duration)
+                new_item["audio_len"] = dur
+                cache[path] = dur
+                cache_updated = True
+                result.append(new_item)
+
+            except Exception as e:
+                logger.warning(f"Ошибка чтения аудиофайла {path}: {e}. Пропуск.")
+
+        # Сохраняем кэш если были изменения
+        if cache_updated and cache_path is not None:
+            try:
+                with open(cache_path, "w", encoding="utf-8") as f:
+                    json.dump(cache, f, ensure_ascii=False, indent=2)
+            except Exception as e:
+                logger.warning(f"Не удалось сохранить кэш: {e}")
+
+        return result
 
     @staticmethod
-    def _sort_index(index: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """
-        Sort index by audio length.
-
-        Args:
-            index (list[dict]): list, containing dict for each element of
-                the dataset. The dict has required metadata information,
-                such as label and object path.
-        Returns:
-            index (list[dict]): sorted list, containing dict for each element
-                of the dataset. The dict has required metadata information,
-                such as label and object path.
-        """
-        # sort only if audio_len exists for all items
-        if len(index) == 0:
-            return index
-        if all(("audio_len" in el) and (el["audio_len"] is not None) for el in index):
-            return sorted(index, key=lambda x: x["audio_len"])
-        return index
-
-    @staticmethod
-    def _shuffle_and_limit_index(
-        index: List[Dict[str, Any]],
+    def shuffle_and_limit(
+        index: list[dict[str, Any]],
         limit: Optional[int],
         shuffle_index: bool,
-    ) -> List[Dict[str, Any]]:
+        seed: int = 42,
+    ) -> list[dict[str, Any]]:
         """
         Shuffle elements in index and limit the total number of elements.
 
@@ -295,9 +355,13 @@ class BaseDataset(Dataset):
             shuffle_index (bool): if True, shuffle the index. Uses python
                 random package with seed 42.
         """
+        index = list(index)
+
         if shuffle_index:
-            random.seed(42)
+            random.seed(int(seed))
             random.shuffle(index)
+
         if limit is not None:
             index = index[: int(limit)]
+
         return index

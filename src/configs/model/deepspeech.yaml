@@ -1,4 +1,0 @@
-_target_: src.model.deepspeech.DeepSpeech2
-n_feats: 128
-rnn_hidden: 512
-num_rnn_layers: 3

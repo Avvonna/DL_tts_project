@@ -1,38 +1,159 @@
 defaults:
-  - model: baseline
-  - writer: wandb
-  - metrics: asr_argmax
-  - datasets: onebatchtest
-  - dataloader: default
-  - transforms: no_augs
-  - lr_scheduler: one_cycle
   - _self_
 
-decoding:
-  beam_size: 1            # только Argmax
-  topk_per_timestep: 10
-  beam_threshold: 70.0
+# Generator
+generator:
+  _target_: src.model.hifigan.Generator
+  in_channels: 80
+  upsample_rates: [8, 8, 2, 2]
+  upsample_kernel_sizes: [16, 16, 4, 4]
+  upsample_initial_channel: 512
+  resblock_kernel_sizes: [3, 7, 11]
+  resblock_dilation_sizes: [[1, 3, 5], [1, 3, 5], [1, 3, 5]]
 
+# Discriminators
+discriminator:
+  mpd:
+    _target_: src.model.hifigan.MultiPeriodDiscriminator
+    periods: [2, 3, 5, 7, 11]
+  msd:
+    _target_: src.model.hifigan.MultiScaleDiscriminator
+
+# Losses
+loss:
+  generator:
+    _target_: src.loss.GeneratorLoss
+    lambda_fm: 2.0
+    lambda_mel: 45.0
+  discriminator:
+    _target_: src.loss.DiscriminatorLoss
+
+# Optimizers
 optimizer:
-  _target_: torch.optim.AdamW
-  lr: 3e-4
+  generator:
+    _target_: torch.optim.AdamW
+    lr: 0.0002
+    betas: [0.8, 0.99]
+    weight_decay: 0.0
+  discriminator:
+    _target_: torch.optim.AdamW
+    lr: 0.0002
+    betas: [0.8, 0.99]
+    weight_decay: 0.0
 
-loss_function:
-  _target_: src.loss.CTCLossWrapper
+# LR Schedulers
+lr_scheduler:
+  generator:
+    _target_: torch.optim.lr_scheduler.ExponentialLR
+    gamma: 0.999
+  discriminator:
+    _target_: torch.optim.lr_scheduler.ExponentialLR
+    gamma: 0.999
 
-text_encoder:
-  _target_: src.text_encoder.CTCTextEncoder
+# Mel Spectrogram Transform
+mel_spec_transform:
+  _target_: src.transforms.mel_spectrogram.MelSpectrogram
+  config:
+    _target_: src.transforms.mel_spectrogram.MelSpectrogramConfig
+    sr: ${preprocess.audio.sr}
+    n_fft: 1024
+    hop_length: 256
+    win_length: 1024
+    n_mels: 80
+    f_min: 0.0
+    f_max: 8000.0
+    power: 1.0
+    eps: 1e-5
+    mel_scale: slaney
+    norm: slaney
 
+
+# Datasets
+datasets:
+  train:
+    _target_: src.datasets.ruslan_dataset.RUSLANDataset
+    data_dir: "data/RUSLAN"
+    split: train
+    split_seed: ${trainer.seed}
+    val_size: 0.02
+    test_size: 0.0
+    target_sr: 22050
+    limit: null
+    max_audio_length: null
+    min_audio_length: 0.5
+    segment_size: 8192
+    shuffle_index: true
+    random_crop: true
+    cache_dir: "data/cache"
+
+  val:
+    _target_: src.datasets.ruslan_dataset.RUSLANDataset
+    data_dir: "data/RUSLAN"
+    split: val
+    split_seed: ${trainer.seed}
+    val_size: 0.02
+    test_size: 0.0
+    target_sr: 22050
+    limit: null
+    max_audio_length: null
+    min_audio_length: 0.5
+    segment_size: null
+    shuffle_index: false
+    random_crop: false
+    cache_dir: "data/cache"
+
+# Dataloader
+dataloader:
+  train:
+    _target_: torch.utils.data.DataLoader
+    batch_size: 32
+    num_workers: 0
+    pin_memory: true
+  val:
+    _target_: torch.utils.data.DataLoader
+    batch_size: 1
+    num_workers: 0
+    pin_memory: true
+
+# Transforms
+transforms:
+  batch_transforms: {}
+
+# Metrics
+metrics:
+  train: []
+  inference: []
+
+# Writer
+writer:
+  _target_: src.logger.WandBWriter
+  project_name: "DL_tts_hw"
+  entity: null
+  run_name: "HiFiGAN"
+  loss_names: ["loss_d", "loss_g"]
+  log_checkpoints: false
+  id_length: 8
+  mode: "online"
+  log_random_sample: true
+
+# Trainer
 trainer:
-  log_step: 10
-  n_epochs: 50
-  epoch_len: null         # null = полный проход по датасету
-  device_tensors: ["spectrogram", "text_encoded"]
-  resume_from: null
+  log_step: 200
+  n_epochs: 3100
+  epoch_len: null
+  device_tensors: ["mel", "audio"]
+  resume_from: "checkpoint-epoch325.pth"
   device: auto
-  override: True
-  monitor: "min val_WER_(Argmax)"
+  override: true
+  monitor: "min val_mel_loss"
   save_period: 5
-  early_stop: 50
+  early_stop: 100
   save_dir: "saved"
   seed: 42
+  grad_clip_g: null
+  grad_clip_d: null
+
+# Preprocess
+preprocess:
+  audio:
+    sr: 22050

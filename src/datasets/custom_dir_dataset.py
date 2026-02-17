@@ -1,9 +1,10 @@
-from __future__ import annotations
-
+import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from src.datasets.base_dataset import BaseDataset
+
+logger = logging.getLogger(__name__)
 
 
 class CustomDirDataset(BaseDataset):
@@ -11,22 +12,16 @@ class CustomDirDataset(BaseDataset):
     Dataset для инференса/валидации на кастомных данных.
 
     Ожидаемая структура папки:
-
-    root_dir
-    ├── audio
-    │   ├── UtteranceID1.wav (или .flac/.mp3/.m4a)
+    root_dir/
+    ├── audio/
+    │   ├── file1.wav
     │   └── ...
-    └── transcriptions (необязательно)
-        ├── UtteranceID1.txt
+    └── transcriptions/
+        ├── file1.txt
         └── ...
-
-    Идея:
-      - берем все аудиофайлы из папки audio
-      - для каждого аудио пытаемся найти txt с таким же именем в transcriptions
-      - если require_text=True, то оставляем только те файлы, где txt найден
-      - если require_text=False, то текст не обязателен (тогда метрики обычно не считаются)
     """
 
+    # Поддерживаемые форматы аудио
     AUDIO_EXTS = {".wav", ".flac", ".mp3"}
 
     def __init__(
@@ -34,86 +29,97 @@ class CustomDirDataset(BaseDataset):
         data_dir: str,
         audio_dir: Optional[str] = None,
         transcription_dir: Optional[str] = None,
-        require_text: Optional[bool] = None,
         *args,
         **kwargs,
     ):
+        """
+        Args:
+            data_dir (str): Путь к корневой директории датасета.
+            audio_dir (str, optional): Переопределить путь к папке audio.
+            transcription_dir (str, optional): Переопределить путь к папке transcriptions.
+            *args, **kwargs: Аргументы для BaseDataset (target_sr, limit, compute_mel и т.д.).
+        """
         root = Path(data_dir)
 
         # если явно не передали путь к аудио, используем root/audio
-        if audio_dir is None:
-            audio_path = root / "audio"
-        else:
-            audio_path = Path(audio_dir)
+        self.audio_path = Path(audio_dir) if audio_dir else root / "audio"
 
         # если явно не передали путь к транскрипциям, используем root/transcriptions
-        if transcription_dir is None:
-            trans_path = root / "transcriptions"
-        else:
-            trans_path = Path(transcription_dir)
-
-        # проверяем, существует ли папка с транскрипциями
-        has_trans_dir = trans_path.exists() and trans_path.is_dir()
-        if require_text is None:
-            require_text = bool(has_trans_dir)
+        self.trans_path = (
+            Path(transcription_dir) if transcription_dir else root / "transcriptions"
+        )
 
         # строим индекс
-        index = self._build_index(
-            audio_path=audio_path,
-            trans_path=trans_path if has_trans_dir else None,
-            require_text=bool(require_text),
-        )
+        index = self._build_index()
 
-        # BaseDataset дальше уже:
-        # - (опционально) посчитает audio_len
-        # - применит фильтры по длине (если заданы)
-        # - применит transforms и т.д.
-        super().__init__(
-            index=index,
-            require_text=bool(require_text),
-            *args,
-            **kwargs,
-        )
+        # BaseDataset возьмет этот индекс и будет сам грузить аудио и считать мелы
+        super().__init__(index=index, *args, **kwargs)
 
-    def _build_index(
-        self,
-        audio_path: Path,
-        trans_path: Optional[Path],
-        require_text: bool,
-    ) -> List[Dict[str, Any]]:
-        if not audio_path.exists() or not audio_path.is_dir():
-            raise FileNotFoundError(f"audio directory does not exist: {audio_path}")
+    def _build_index(self) -> list[dict[str, Any]]:
+        """
+        Сканирует директории и создает список словарей для BaseDataset.
+        """
+        # Проверка наличия аудио
+        if not self.audio_path.exists() or not self.audio_path.is_dir():
+            raise FileNotFoundError(f"Папка с аудио не найдена: {self.audio_path}")
 
-        # все файлы списком
-        audio_files = sorted(
-            [
-                p
-                for p in audio_path.iterdir()
-                if p.is_file() and p.suffix.lower() in self.AUDIO_EXTS
-            ]
-        )
+        # Проверка наличия транскрипций (не критично, только ворнинг)
+        transcriptions_found = False
+        if self.trans_path.exists() and self.trans_path.is_dir():
+            transcriptions_found = True
+        else:
+            logger.info(
+                f"Папка с транскрипциями '{self.trans_path}' не найдена. "
+                "Датасет будет загружен без текстов (режим Resynthesis)."
+            )
 
-        data: List[Dict[str, Any]] = []
-        for p in audio_files:
-            # имя файла без расширения
-            utt_id = p.stem
+        # Собираем аудиофайлы
+        audio_files = []
+        for ext in self.AUDIO_EXTS:
+            audio_files.extend(self.audio_path.glob(f"*{ext}"))
+            audio_files.extend(self.audio_path.glob(f"*{ext.upper()}"))
 
-            # путь до аудио
-            entry: Dict[str, Any] = {
-                "path": str(p.absolute().resolve()),
+        audio_files = sorted(list(set(audio_files)))  # Убираем дубли и сортируем
+
+        if not audio_files:
+            raise FileNotFoundError(
+                f"В папке {self.audio_path} не найдено аудиофайлов."
+            )
+
+        data: list[dict[str, Any]] = []
+        missing_texts = 0
+
+        for audio_file in audio_files:
+            utt_id = audio_file.stem
+            text = ""
+
+            # Если папка с текстом существует, пытаемся найти файл
+            if transcriptions_found:
+                txt_file = self.trans_path / f"{utt_id}.txt"
+                if txt_file.exists():
+                    try:
+                        # Читаем текст, убираем переносы строк
+                        text = txt_file.read_text(encoding="utf-8").strip()
+                    except Exception as e:
+                        logger.warning(f"Ошибка чтения текста для {utt_id}: {e}")
+                else:
+                    missing_texts += 1
+
+            # Формируем запись для BaseDataset
+            entry = {
+                "path": str(audio_file.absolute()),
+                "text": text,
                 "utt_id": utt_id,
             }
-
-            # если есть папка с транскрипциями, пытаемся подцепить текст
-            if trans_path is not None:
-                txt = trans_path / f"{utt_id}.txt"
-                if txt.exists():
-                    entry["text"] = txt.read_text(encoding="utf-8").strip()
-
-            # если текст обязателен, то пропускаем файлы без транскрипции
-            if require_text and "text" not in entry:
-                continue
-
             data.append(entry)
+
+        # Логируем статистику
+        logger.info(f"Найдено {len(data)} аудиофайлов в {self.audio_path}")
+
+        if transcriptions_found:
+            if missing_texts > 0:
+                logger.warning(f"Отсутствует текст для {missing_texts} файлов.")
+            else:
+                logger.info("Для всех аудиофайлов найдены транскрипции.")
 
         return data
