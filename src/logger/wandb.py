@@ -46,13 +46,29 @@ class WandBWriter:
 
             self.run_id = run_id
 
+            resume_epoch = kwargs.get("resume_epoch")
+            epoch_len = kwargs.get("epoch_len")
+            enable_rewind = kwargs.get("rewind", False)
+            resume_arg = "allow"
+            resume_from_arg = None
+
+            if enable_rewind and resume_epoch is not None and run_id is not None and epoch_len is not None:
+                rewind_step = (resume_epoch - 1) * (epoch_len + 1)
+                logger.info(
+                    f"Rewinding wandb run {run_id} to step {rewind_step} "
+                    f"(epoch {resume_epoch}, epoch_len {epoch_len})"
+                )
+                resume_arg = None
+                resume_from_arg = f"{run_id}?_step={rewind_step}"
+
             wandb.init(
                 project=project_name,
                 entity=entity,
                 config=project_config,
                 name=run_name,
-                resume="allow",  # resume the run if run_id existed
-                id=self.run_id,
+                resume=resume_arg,
+                id=run_id if resume_from_arg is None else None,
+                resume_from=resume_from_arg,
                 mode=mode,
                 save_code=kwargs.get("save_code", False),
             )

@@ -2,16 +2,36 @@
 
 # Маленькая версия
 generator:
-  upsample_initial_channel: 256
-  resblock_kernel_sizes: [3, 7]
-  resblock_dilation_sizes: [[1, 3, 5], [1, 3, 5]]
+  upsample_initial_channel: 256   # меньше ширина модели
+  resblock_kernel_sizes: [3, 7, 11] 
+  resblock_dilation_sizes: [[1, 3, 5], [1, 3, 5], [1, 3, 5]]
 
-trainer:
-  n_epochs: 100
-  epoch_len: 500
-  log_step: 50
-  save_period: 10
-  seed: 42
+lr_scheduler:
+  generator:
+    gamma: 0.995  # быстрее затухание
+  discriminator:
+    gamma: 0.995
+
+mel_spec_transform:
+  config:
+    f_max: null   # пусть видит все частоты
+    f_min: 0.0
 
 writer:
-  run_name: "HiFiGAN_Small"
+  run_name: "HiFiGAN small"
+
+trainer:
+  use_amp: true
+  n_epochs: 1000   # ~ 1000 * (22000 * 0.98 / 64) ~ 340k шагов
+  log_step: 100
+  save_period: 10
+  seed: 42
+  resume_from: null
+  
+dataloader:
+  train:
+    batch_size: 64
+
+loss:
+  generator:
+    lambda_fm: 5.0   # чуть более агрессивный эффект дискриминатора

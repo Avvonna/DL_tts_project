@@ -97,6 +97,7 @@ class BaseTrainer(ABC):
         self.criterion = criterion
         self.optimizer = optimizer
         self.lr_scheduler = lr_scheduler
+        self.scaler = None
 
         # Normalize to ModuleDict if dict is passed
         if isinstance(model, dict):
@@ -623,6 +624,10 @@ class BaseTrainer(ABC):
         elif self.lr_scheduler is not None:
             checkpoint["lr_scheduler"] = self.lr_scheduler.state_dict()
 
+        # Scaler
+        if self.scaler is not None:
+            checkpoint["scaler"] = self.scaler.state_dict()
+
         return checkpoint
 
     def _load_checkpoint_data(self, checkpoint: dict[str, Any]):
@@ -662,6 +667,10 @@ class BaseTrainer(ABC):
                         self.lr_scheduler[name].load_state_dict(state_dict)
             elif self.lr_scheduler is not None:
                 self.lr_scheduler.load_state_dict(checkpoint["lr_scheduler"])
+
+        # Scaler
+        if "scaler" in checkpoint and self.scaler is not None:
+            self.scaler.load_state_dict(checkpoint["scaler"])
 
     def _save_checkpoint(
         self, epoch: int, save_best: bool = False, only_best: bool = False
@@ -722,6 +731,16 @@ class BaseTrainer(ABC):
         self.start_epoch = int(checkpoint["epoch"]) + 1
         self.mnt_best = checkpoint.get("monitor_best", self.mnt_best)
         self._load_checkpoint_data(checkpoint)
+
+        # Опциональный сброс optimizer
+        if self.cfg_trainer.get("reset_optimizer", False):
+            self.logger.info("Resetting optimizer state...")
+            if isinstance(self.optimizer, dict):
+                for opt in self.optimizer.values():
+                    opt.state.clear()
+            elif self.optimizer is not None:
+                self.optimizer.state.clear()
+
         self.logger.info(f"Checkpoint loaded. Resume from epoch {self.start_epoch}")
 
     def _from_pretrained(self, pretrained_path: str):

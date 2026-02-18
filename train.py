@@ -21,14 +21,23 @@ def main(config):
     set_random_seed(config.trainer.seed)
 
     project_config = OmegaConf.to_container(config)
-    logger = setup_saving_and_logging(config)
-    writer = instantiate(config.writer, logger, project_config)
+    logger, resume_epoch = setup_saving_and_logging(config)
 
     device = resolve_device(config.trainer.device)
 
     # setup data_loader instances
     dataloaders, batch_transforms = get_dataloaders(
         config, text_encoder=None, device=device
+    )
+    epoch_len = config.trainer.get("epoch_len") or len(dataloaders["train"])
+
+    writer = instantiate(
+        config.writer,
+        logger,
+        project_config,
+        resume_epoch=resume_epoch,
+        epoch_len=epoch_len,
+        rewind=config.trainer.get("rewind", False)
     )
 
     # build model architecture

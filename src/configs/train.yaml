@@ -138,11 +138,14 @@ writer:
 
 # Trainer
 trainer:
+  use_amp: false
   log_step: 200
   n_epochs: 3100
   epoch_len: null
   device_tensors: ["mel", "audio"]
-  resume_from: "checkpoint-epoch325.pth"
+  resume_from: "checkpoint-epoch315.pth"
+  rewind: false
+  reset_optimizer: false
   device: auto
   override: true
   monitor: "min val_mel_loss"

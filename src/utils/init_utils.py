@@ -114,10 +114,12 @@ def saving_init(save_dir, config):
         config (DictConfig): hydra config for the current experiment.
     """
     run_id = None
+    resume_epoch = None
 
     if save_dir.exists():
         if config.trainer.get("resume_from") is not None:
             run_id = resume_config(save_dir)
+            resume_epoch = _get_resume_epoch(save_dir, config)
         elif config.trainer.override:
             print(f"Overriding save directory '{save_dir}'...")
             shutil.rmtree(str(save_dir))
@@ -134,11 +136,24 @@ def saving_init(save_dir, config):
     OmegaConf.set_struct(config, False)
     config.writer.run_id = run_id
     OmegaConf.set_struct(config, True)
-
     OmegaConf.save(config, save_dir / "config.yaml")
 
     log_git_commit_and_patch(save_dir)
+    return resume_epoch
 
+def _get_resume_epoch(save_dir, config) -> int | None:
+    """
+    Reads epoch number from the checkpoint specified in resume_from.
+    """
+    try:
+        checkpoint_path = save_dir / config.trainer.resume_from
+        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+        epoch = int(checkpoint["epoch"])
+        print(f"Checkpoint epoch: {epoch}")
+        return epoch
+    except Exception as e:
+        print(f"Warning: could not read epoch from checkpoint: {e}")
+        return None
 
 def setup_saving_and_logging(config):
     """
@@ -152,7 +167,7 @@ def setup_saving_and_logging(config):
         logger (Logger): logger that logs output.
     """
     save_dir = ROOT_PATH / config.trainer.save_dir / config.writer.run_name
-    saving_init(save_dir, config)
+    resume_epoch = saving_init(save_dir, config)
 
     if config.trainer.get("resume_from") is not None:
         setup_logging(save_dir, append=True)
@@ -161,4 +176,4 @@ def setup_saving_and_logging(config):
     logger = logging.getLogger("train")
     logger.setLevel(logging.DEBUG)
 
-    return logger
+    return logger, resume_epoch

@@ -3,6 +3,8 @@ import random
 from typing import Any, Callable, Optional
 
 import torch
+from torch.amp.autocast_mode import autocast
+from torch.amp.grad_scaler import GradScaler
 from torch.nn import Module, ModuleDict
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
@@ -107,6 +109,12 @@ class GANTrainer(BaseTrainer):
         self.grad_clip_g = self.config.trainer.get("grad_clip_g")
         self.grad_clip_d = self.config.trainer.get("grad_clip_d")
 
+        self.use_amp = self.config.trainer.get("use_amp", False)
+        if self.use_amp and self.device == 'cpu':
+            self.logger.warning("AMP is enabled but device is CPU. This might be slow.")
+
+        self.scaler = GradScaler(device=self.device, enabled=self.use_amp)
+
     def _set_requires_grad_params(self, params, flag: bool) -> None:
         """Функция установки requires_grad_"""
         for p in params:
@@ -122,15 +130,19 @@ class GANTrainer(BaseTrainer):
         self._set_requires_grad_params(self._d_params, True)
         self.optimizer_d.zero_grad(set_to_none=True)
 
-        with torch.no_grad():
-            fake_detached = self.generator(batch["mel"])
-        assert_same_length(fake_detached, batch["audio"])
+        with autocast(device_type=self.device, dtype=torch.float16, enabled=self.use_amp):
+            with torch.no_grad():
+                fake_detached = self.generator(batch["mel"])
+            assert_same_length(fake_detached, batch["audio"])
 
-        loss_d, loss_d_dict = self._compute_discriminator_loss(batch["audio"], fake_detached)
-        loss_d.backward()
+            loss_d, loss_d_dict = self._compute_discriminator_loss(batch["audio"], fake_detached)
+
+        self.scaler.scale(loss_d).backward()
+        self.scaler.unscale_(self.optimizer_d)
 
         grad_norm_d = self._clip_grad_norm(model=self._d_params, max_norm=self.grad_clip_d)
-        self.optimizer_d.step()
+        self.scaler.step(self.optimizer_d)
+        self.scaler.update()
 
         return loss_d, loss_d_dict, float(grad_norm_d)
 
@@ -144,14 +156,18 @@ class GANTrainer(BaseTrainer):
         self._set_requires_grad_params(self._d_params, False)
         self.optimizer_g.zero_grad(set_to_none=True)
 
-        fake = self.generator(batch["mel"])
-        assert_same_length(fake, batch["audio"])
+        with autocast(device_type=self.device, dtype=torch.float16, enabled=self.use_amp):
+            fake = self.generator(batch["mel"])
+            assert_same_length(fake, batch["audio"])
 
-        loss_g, loss_g_dict = self._compute_generator_loss(batch["audio"], fake, batch["mel"])
-        loss_g.backward()
+            loss_g, loss_g_dict = self._compute_generator_loss(batch["audio"], fake, batch["mel"])
+
+        self.scaler.scale(loss_g).backward()
+        self.scaler.unscale_(self.optimizer_g)
 
         grad_norm_g = self._clip_grad_norm(model=self.generator, max_norm=self.grad_clip_g)
-        self.optimizer_g.step()
+        self.scaler.step(self.optimizer_g)
+        self.scaler.update()
 
         return loss_g, loss_g_dict, float(grad_norm_g), fake
 
@@ -413,8 +429,9 @@ class GANTrainer(BaseTrainer):
 
         # Логируем аудио
         if "audio" in batch:
-            self.writer.add_audio("audio_real", batch["audio"][idx], sample_rate=sr)
-
+            # На eval реальное аудио достаточно закинуть 1 раз - оно не меняется
+            if mode == "train" or self._last_epoch <= 1:
+                self.writer.add_audio("audio_real", batch["audio"][idx], sample_rate=sr)
         if "audio_fake" in batch:
             self.writer.add_audio("audio_fake", batch["audio_fake"][idx], sample_rate=sr)
 
