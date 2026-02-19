@@ -20,6 +20,28 @@ from src.utils.io_utils import abs_path
 
 logger = logging.getLogger("synthesize")
 
+def _extract_generator_state(ckpt: object) -> dict:
+    """
+    Возвращает state_dict генератора
+    """
+    if isinstance(ckpt, dict) and "state_dict" in ckpt and isinstance(ckpt["state_dict"], dict):
+        sd = ckpt["state_dict"]
+
+        # отдельный под-словарь generator
+        if "generator" in sd and isinstance(sd["generator"], dict):
+            return sd["generator"]
+
+        # плоский state_dict с префиксом generator
+        if any(k.startswith("generator.") for k in sd.keys()):
+            return {k[len("generator."):]: v for k, v in sd.items() if k.startswith("generator.")}
+
+        # state_dict генератора
+        return sd
+
+    if isinstance(ckpt, dict):
+        return ckpt
+
+    raise RuntimeError("Не удалось распознать формат чекпоинта генератора.")
 
 @hydra.main(version_base=None, config_path="src/configs", config_name="synthesize")
 def main(cfg: DictConfig) -> None:
@@ -42,15 +64,11 @@ def main(cfg: DictConfig) -> None:
     ckpt_path = abs_path(cfg.synthesize.checkpoint_path)
     ckpt = torch.load(str(ckpt_path), map_location=device, weights_only=False)
 
-    if isinstance(ckpt, dict) and "state_dict" in ckpt and "generator" in ckpt["state_dict"]:
-        gen_state = ckpt["state_dict"]["generator"]
-    else:
-        gen_state = ckpt
-
-    generator.load_state_dict(gen_state, strict=True)
+    generator.load_state_dict(ckpt, strict=True)
 
     if cfg.synthesize.get("remove_weight_norm", True) and hasattr(generator, "remove_weight_norm"):
         generator.remove_weight_norm()
+
     generator.eval()
 
     # Инициализация mel-трансформа

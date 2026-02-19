@@ -39,8 +39,18 @@ dev = [
     "ruff>=0.14.10",
     "wandb>=0.24.2",
 ]
+local = [
+    "ipykernel>=7.2.0",
+    "ipywidgets>=8.1.8",
+    "numpy>=2.4.2",
+    "pandas>=3.0.0",
+]
 torch = [
     "torch>=2.10.0",
     "torchaudio>=2.10.0",
     "torchvision>=0.25.0",
+]
+train = [
+    "pillow>=12.1.0",
+    "wandb>=0.24.2",
 ]
