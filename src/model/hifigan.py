@@ -9,23 +9,23 @@ def init_weights(m):
     """Универсальная функция инициализации весов."""
     if isinstance(m, (nn.Conv1d, nn.Conv2d, nn.ConvTranspose1d)):
         # weight_norm (parametrizations)
-        if hasattr(m, 'parametrizations'):
-            weight_params = getattr(m.parametrizations, 'weight', None)
+        if hasattr(m, "parametrizations"):
+            weight_params = getattr(m.parametrizations, "weight", None)
             if weight_params is not None:
                 # original1 - вектор направления
-                original1 = getattr(weight_params, 'original1', None)
+                original1 = getattr(weight_params, "original1", None)
                 if original1 is not None and isinstance(original1, torch.Tensor):
                     nn.init.normal_(original1.data, mean=0.0, std=0.01)
                     return
 
         # spectral norm (weight_orig)
-        weight_orig = getattr(m, 'weight_orig', None)
+        weight_orig = getattr(m, "weight_orig", None)
         if weight_orig is not None and isinstance(weight_orig, torch.Tensor):
             nn.init.normal_(weight_orig.data, mean=0.0, std=0.01)
             return
 
         # обычная инициализация весов (weight)
-        weight = getattr(m, 'weight', None)
+        weight = getattr(m, "weight", None)
         if weight is not None and isinstance(weight, torch.Tensor):
             nn.init.normal_(weight.data, mean=0.0, std=0.01)
 
@@ -35,25 +35,40 @@ class ResBlock(nn.Module):
     Residual блок с dilated convolutions.
     Используется в генераторе HiFi-GAN.
     """
+
     def __init__(self, channels, kernel_size=3, dilation=(1, 3, 5)):
         super().__init__()
 
         # Несколько веток с разными dilation rates
-        self.convs1 = nn.ModuleList([
-            weight_norm(nn.Conv1d(
-                channels, channels, kernel_size,
-                dilation=d, padding=self._get_padding(kernel_size, d)
-            ))
-            for d in dilation
-        ])
+        self.convs1 = nn.ModuleList(
+            [
+                weight_norm(
+                    nn.Conv1d(
+                        channels,
+                        channels,
+                        kernel_size,
+                        dilation=d,
+                        padding=self._get_padding(kernel_size, d),
+                    )
+                )
+                for d in dilation
+            ]
+        )
 
-        self.convs2 = nn.ModuleList([
-            weight_norm(nn.Conv1d(
-                channels, channels, kernel_size,
-                dilation=1, padding=self._get_padding(kernel_size, 1)
-            ))
-            for _ in dilation
-        ])
+        self.convs2 = nn.ModuleList(
+            [
+                weight_norm(
+                    nn.Conv1d(
+                        channels,
+                        channels,
+                        kernel_size,
+                        dilation=1,
+                        padding=self._get_padding(kernel_size, 1),
+                    )
+                )
+                for _ in dilation
+            ]
+        )
 
         # Веса инициализируются в генераторе
 
@@ -82,6 +97,7 @@ class Generator(nn.Module):
     HiFi-GAN Generator.
     Преобразует mel-спектрограмму в аудио через transposed convolutions.
     """
+
     def __init__(
         self,
         in_channels=80,  # mel bins
@@ -97,18 +113,24 @@ class Generator(nn.Module):
         self.num_upsamples = len(upsample_rates)
 
         # Входная conv для преобразования mel в скрытое представление
-        self.conv_pre = weight_norm(nn.Conv1d(
-            in_channels, upsample_initial_channel, 7, padding=3
-        ))
+        self.conv_pre = weight_norm(
+            nn.Conv1d(in_channels, upsample_initial_channel, 7, padding=3)
+        )
 
         # Upsample блоки
         self.ups = nn.ModuleList()
         for i, (rate, kernel) in enumerate(zip(upsample_rates, upsample_kernel_sizes)):
-            self.ups.append(weight_norm(nn.ConvTranspose1d(
-                upsample_initial_channel // (2 ** i),
-                upsample_initial_channel // (2 ** (i + 1)),
-                kernel, stride=rate, padding=(kernel - rate) // 2
-            )))
+            self.ups.append(
+                weight_norm(
+                    nn.ConvTranspose1d(
+                        upsample_initial_channel // (2**i),
+                        upsample_initial_channel // (2 ** (i + 1)),
+                        kernel,
+                        stride=rate,
+                        padding=(kernel - rate) // 2,
+                    )
+                )
+            )
 
         # Residual блоки после каждого upsample
         self.resblocks = nn.ModuleList()
@@ -162,18 +184,29 @@ class PeriodDiscriminator(nn.Module):
     Discriminator для одного периода.
     Reshape входа в 2D и применяет 2D convolutions.
     """
+
     def __init__(self, period, kernel_size=5, stride=3):
         super().__init__()
         self.period = period
 
         # Набор 2D convolutions
-        self.convs = nn.ModuleList([
-            weight_norm(nn.Conv2d(1, 32, (kernel_size, 1), (stride, 1), padding=(2, 0))),
-            weight_norm(nn.Conv2d(32, 128, (kernel_size, 1), (stride, 1), padding=(2, 0))),
-            weight_norm(nn.Conv2d(128, 512, (kernel_size, 1), (stride, 1), padding=(2, 0))),
-            weight_norm(nn.Conv2d(512, 1024, (kernel_size, 1), (stride, 1), padding=(2, 0))),
-            weight_norm(nn.Conv2d(1024, 1024, (kernel_size, 1), 1, padding=(2, 0))),
-        ])
+        self.convs = nn.ModuleList(
+            [
+                weight_norm(
+                    nn.Conv2d(1, 32, (kernel_size, 1), (stride, 1), padding=(2, 0))
+                ),
+                weight_norm(
+                    nn.Conv2d(32, 128, (kernel_size, 1), (stride, 1), padding=(2, 0))
+                ),
+                weight_norm(
+                    nn.Conv2d(128, 512, (kernel_size, 1), (stride, 1), padding=(2, 0))
+                ),
+                weight_norm(
+                    nn.Conv2d(512, 1024, (kernel_size, 1), (stride, 1), padding=(2, 0))
+                ),
+                weight_norm(nn.Conv2d(1024, 1024, (kernel_size, 1), 1, padding=(2, 0))),
+            ]
+        )
 
         self.conv_post = weight_norm(nn.Conv2d(1024, 1, (3, 1), 1, padding=(1, 0)))
 
@@ -211,11 +244,10 @@ class MultiPeriodDiscriminator(nn.Module):
     """
     MPD - несколько Period Discriminators с разными периодами.
     """
+
     def __init__(self, periods=(2, 3, 5, 7, 11)):
         super().__init__()
-        self.discriminators = nn.ModuleList([
-            PeriodDiscriminator(p) for p in periods
-        ])
+        self.discriminators = nn.ModuleList([PeriodDiscriminator(p) for p in periods])
 
     def forward(self, x):
         """
@@ -232,18 +264,21 @@ class ScaleDiscriminator(nn.Module):
     """
     Один Scale Discriminator - стандартный 1D CNN.
     """
+
     def __init__(self, use_spectral_norm=False):
         super().__init__()
         norm_f = nn.utils.spectral_norm if use_spectral_norm else weight_norm
 
-        self.convs = nn.ModuleList([
-            norm_f(nn.Conv1d(1, 16, 15, 1, padding=7)),
-            norm_f(nn.Conv1d(16, 64, 41, 4, groups=4, padding=20)),
-            norm_f(nn.Conv1d(64, 256, 41, 4, groups=16, padding=20)),
-            norm_f(nn.Conv1d(256, 1024, 41, 4, groups=64, padding=20)),
-            norm_f(nn.Conv1d(1024, 1024, 41, 4, groups=256, padding=20)),
-            norm_f(nn.Conv1d(1024, 1024, 5, 1, padding=2)),
-        ])
+        self.convs = nn.ModuleList(
+            [
+                norm_f(nn.Conv1d(1, 16, 15, 1, padding=7)),
+                norm_f(nn.Conv1d(16, 64, 41, 4, groups=4, padding=20)),
+                norm_f(nn.Conv1d(64, 256, 41, 4, groups=16, padding=20)),
+                norm_f(nn.Conv1d(256, 1024, 41, 4, groups=64, padding=20)),
+                norm_f(nn.Conv1d(1024, 1024, 41, 4, groups=256, padding=20)),
+                norm_f(nn.Conv1d(1024, 1024, 5, 1, padding=2)),
+            ]
+        )
         self.conv_post = norm_f(nn.Conv1d(1024, 1, 3, 1, padding=1))
 
         # Инициализация весов
@@ -270,19 +305,24 @@ class MultiScaleDiscriminator(nn.Module):
     """
     MSD - три Scale Discriminators на разных разрешениях.
     """
+
     def __init__(self):
         super().__init__()
-        self.discriminators = nn.ModuleList([
-            ScaleDiscriminator(use_spectral_norm=True),
-            ScaleDiscriminator(),
-            ScaleDiscriminator(),
-        ])
+        self.discriminators = nn.ModuleList(
+            [
+                ScaleDiscriminator(use_spectral_norm=True),
+                ScaleDiscriminator(),
+                ScaleDiscriminator(),
+            ]
+        )
 
         # Pooling для уменьшения разрешения
-        self.meanpools = nn.ModuleList([
-            nn.AvgPool1d(4, 2, padding=2),
-            nn.AvgPool1d(4, 2, padding=2),
-        ])
+        self.meanpools = nn.ModuleList(
+            [
+                nn.AvgPool1d(4, 2, padding=2),
+                nn.AvgPool1d(4, 2, padding=2),
+            ]
+        )
 
     def forward(self, x):
         """

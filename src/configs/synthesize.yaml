@@ -37,15 +37,16 @@ preprocess:
 
 synthesize:
   device: auto
-  checkpoint_path: "saved/HiFiGAN/model_best.pth"
+  checkpoint_path: "saved/generator.pth"
   output_dir: ${dataset.data_dir}/outputs
   remove_weight_norm: true
-  save_hf_audio: true
-  
+  save_gt: true
+  save_hf: true
+
   # mode: "resynthesis" (Audio -> Mel -> Vocoder)
   # mode: "full_tts"    (Text -> MMS -> Audio_temp -> Mel -> Vocoder)
-  mode: "resynthesis" 
-  
+  mode: "resynthesis"
+
   # Настройки для HuggingFace модели (если mode=full_tts)
   acoustic_model:
     model_name: "facebook/mms-tts-rus"

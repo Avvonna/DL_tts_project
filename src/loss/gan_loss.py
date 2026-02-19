@@ -10,6 +10,7 @@ class DiscriminatorLoss(nn.Module):
     Loss для обучения дискриминатора в HiFi-GAN.
     Использует MSE loss для GAN обучения.
     """
+
     def __init__(self):
         super().__init__()
 
@@ -34,7 +35,9 @@ class DiscriminatorLoss(nn.Module):
             real_outputs = disc_outputs_real[name]
             fake_outputs = disc_outputs_fake[name]
 
-            for i, (real_out_fmap, fake_out_fmap) in enumerate(zip(real_outputs, fake_outputs)):
+            for i, (real_out_fmap, fake_out_fmap) in enumerate(
+                zip(real_outputs, fake_outputs)
+            ):
                 real_out = real_out_fmap[0]  # берем только output, без feature maps
                 fake_out = fake_out_fmap[0]
 
@@ -61,12 +64,21 @@ class GeneratorLoss(nn.Module):
     - Feature matching loss (совпадение промежуточных представлений)
     - Mel-spectrogram reconstruction loss
     """
+
     def __init__(self, lambda_fm=2.0, lambda_mel=45.0):
         super().__init__()
         self.lambda_fm = lambda_fm
         self.lambda_mel = lambda_mel
 
-    def forward(self, audio, audio_fake, disc_outputs_real, disc_outputs_fake, mel, mel_transform):
+    def forward(
+        self,
+        audio,
+        audio_fake,
+        disc_outputs_real,
+        disc_outputs_fake,
+        mel,
+        mel_transform,
+    ):
         """
         Args:
             audio: реальное аудио (не используется, нужен для совместимости)
@@ -89,7 +101,9 @@ class GeneratorLoss(nn.Module):
             real_outputs = disc_outputs_real[name]
             fake_outputs = disc_outputs_fake[name]
 
-            for i, (real_out_fmap, fake_out_fmap) in enumerate(zip(real_outputs, fake_outputs)):
+            for i, (real_out_fmap, fake_out_fmap) in enumerate(
+                zip(real_outputs, fake_outputs)
+            ):
                 fake_out = fake_out_fmap[0]
                 real_fmaps = real_out_fmap[1]
                 fake_fmaps = fake_out_fmap[1]
@@ -105,7 +119,7 @@ class GeneratorLoss(nn.Module):
                     n_fm += 1
 
         loss_adv = loss_adv / max(n_adv, 1)
-        loss_fm  = loss_fm  / max(n_fm, 1)
+        loss_fm = loss_fm / max(n_fm, 1)
 
         # Mel-Spectrogram Reconstruction Loss
         mel_fake = mel_transform(audio_fake.squeeze(1))  # log-mel

@@ -63,11 +63,11 @@ class MetricTracker:
 
     def result(self) -> dict[str, float]:
         """Epoch averages for all metrics."""
-        return {k: float(v) for k, v in self._data["average"].to_dict().items()} # type: ignore
+        return {k: float(v) for k, v in self._data["average"].to_dict().items()}  # type: ignore
 
     def result_window(self) -> dict[str, float]:
         """Window averages for all metrics."""
-        return {k: float(v) for k, v in self._data["w_average"].to_dict().items()} # type: ignore
+        return {k: float(v) for k, v in self._data["w_average"].to_dict().items()}  # type: ignore
 
     def count(self, key: str) -> int:
         """Number of updates for this metric in the current epoch."""

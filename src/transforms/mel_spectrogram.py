@@ -32,7 +32,9 @@ class MelSpectrogram(nn.Module):
     def __init__(self, config: MelSpectrogramConfig):
         super().__init__()
         self.config = config
-        win_length = config.win_length if config.win_length is not None else config.n_fft
+        win_length = (
+            config.win_length if config.win_length is not None else config.n_fft
+        )
 
         # Для совпадения длин: pad = (n_fft - hop) / 2
         self.pad_size = (config.n_fft - config.hop_length) // 2
@@ -69,7 +71,9 @@ class MelSpectrogram(nn.Module):
 
         # reflect-pad требует [B,1,T]
         if self.pad_size > 0:
-            audio = F.pad(audio.unsqueeze(1), (self.pad_size, self.pad_size), mode="reflect").squeeze(1)
+            audio = F.pad(
+                audio.unsqueeze(1), (self.pad_size, self.pad_size), mode="reflect"
+            ).squeeze(1)
 
         mel = self.mel(audio)  # [B, n_mels, T]
         mel = mel.clamp_(min=self.config.eps).log_()

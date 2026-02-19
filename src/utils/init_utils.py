@@ -141,6 +141,7 @@ def saving_init(save_dir, config):
     log_git_commit_and_patch(save_dir)
     return resume_epoch
 
+
 def _get_resume_epoch(save_dir, config) -> int | None:
     """
     Reads epoch number from the checkpoint specified in resume_from.
@@ -154,6 +155,7 @@ def _get_resume_epoch(save_dir, config) -> int | None:
     except Exception as e:
         print(f"Warning: could not read epoch from checkpoint: {e}")
         return None
+
 
 def setup_saving_and_logging(config):
     """
@@ -177,6 +179,7 @@ def setup_saving_and_logging(config):
     logger.setLevel(logging.DEBUG)
 
     return logger, resume_epoch
+
 
 def configure_logging_for_inference() -> None:
     logging.basicConfig(

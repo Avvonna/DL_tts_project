@@ -161,7 +161,9 @@ class RUSLANDataset(BaseDataset):
                 dtype=str,
             )
         except Exception as e:
-            raise RuntimeError(f"Ошибка чтения файла метаданных {metadata_path}: {e}") from e
+            raise RuntimeError(
+                f"Ошибка чтения файла метаданных {metadata_path}: {e}"
+            ) from e
 
         initial_size = len(df)
 
@@ -170,7 +172,9 @@ class RUSLANDataset(BaseDataset):
         df = df[df["text"] != ""]
 
         # Формируем путь к аудио и проверяем существование
-        df["audio_path"] = df["utt_id"].apply(lambda x: root_dir / (x + audio_extension))
+        df["audio_path"] = df["utt_id"].apply(
+            lambda x: root_dir / (x + audio_extension)
+        )
         df["exists"] = df["audio_path"].apply(lambda x: x.exists())
         df = df[df["exists"]]
 
@@ -219,7 +223,9 @@ class RUSLANDataset(BaseDataset):
         """
         n = len(index)
         if n == 0:
-            logger.warning("После фильтрации индекс пустой. split вернет пустой датасет.")
+            logger.warning(
+                "После фильтрации индекс пустой. split вернет пустой датасет."
+            )
             return []
 
         def to_count(x: int | float, total: int) -> int:
@@ -245,10 +251,14 @@ class RUSLANDataset(BaseDataset):
 
         # Ограничиваем val/test по верхней границе n
         if val_count > n:
-            logger.warning(f"val_size={desired_val} больше размера данных n={n}. val будет урезан до {n}.")
+            logger.warning(
+                f"val_size={desired_val} больше размера данных n={n}. val будет урезан до {n}."
+            )
             val_count = n
         if test_count > n:
-            logger.warning(f"test_size={desired_test} больше размера данных n={n}. test будет урезан до {n}.")
+            logger.warning(
+                f"test_size={desired_test} больше размера данных n={n}. test будет урезан до {n}."
+            )
             test_count = n
 
         # Контролируем суммарный размер
