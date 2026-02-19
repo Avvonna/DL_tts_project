@@ -38,7 +38,17 @@ def main(cfg: DictConfig) -> None:
     ckpt = torch.load(str(ckpt_path), map_location=device, weights_only=False)
 
     generator = instantiate(cfg.generator).to(device)
-    generator.load_state_dict(ckpt["state_dict"]["generator"], strict=True)
+
+    ckpt_path = abs_path(cfg.synthesize.checkpoint_path)
+    ckpt = torch.load(str(ckpt_path), map_location=device, weights_only=False)
+
+    if isinstance(ckpt, dict) and "state_dict" in ckpt and "generator" in ckpt["state_dict"]:
+        gen_state = ckpt["state_dict"]["generator"]
+    else:
+        gen_state = ckpt
+
+    generator.load_state_dict(gen_state, strict=True)
+
     if cfg.synthesize.get("remove_weight_norm", True) and hasattr(generator, "remove_weight_norm"):
         generator.remove_weight_norm()
     generator.eval()
