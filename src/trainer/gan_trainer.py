@@ -21,6 +21,7 @@ class GANTrainer(BaseTrainer):
     """
     Trainer for GAN-based TTS Vocoders
     """
+
     model: ModuleDict
     criterion: dict[str, Callable]
     optimizer: dict
@@ -50,7 +51,6 @@ class GANTrainer(BaseTrainer):
         skip_oom: bool = True,
         batch_transforms: Optional[dict[str, dict[str, Callable]]] = None,
     ):
-
         # Пакуем все в словари для BaseTrainer
         model_dict = {
             "generator": generator,
@@ -89,7 +89,9 @@ class GANTrainer(BaseTrainer):
         self.generator = self.model["generator"]
         # Все модели, кроме генератора - дискриминаторы (MPD, MSD и т.д.)
         self.discriminators = {k: v for k, v in self.model.items() if k != "generator"}
-        self._d_params = [p for d in self.discriminators.values() for p in d.parameters()]
+        self._d_params = [
+            p for d in self.discriminators.values() for p in d.parameters()
+        ]
 
         self.optimizer_g = self.optimizer["generator"]
         self.optimizer_d = self.optimizer["discriminator"]
@@ -103,14 +105,18 @@ class GANTrainer(BaseTrainer):
             self.lr_scheduler_d = None
 
         # Преобразование в mel-спектрограмму нужно для валидации (Reconstruction Loss)
-        self.mel_transform = mel_spec_transform.to(device) if mel_spec_transform else None
+        self.mel_transform = (
+            mel_spec_transform.to(device) if mel_spec_transform else None
+        )
 
         # Настройки клиппинга градиентов из конфига
         self.grad_clip_g = self.config.trainer.get("grad_clip_g")
         self.grad_clip_d = self.config.trainer.get("grad_clip_d")
 
-        self.use_amp = self.config.trainer.get("use_amp", False)
-        if self.use_amp and self.device == 'cpu':
+        self.use_amp = bool(self.config.trainer.get("use_amp", False)) and (
+            self.device != "cpu"
+        )
+        if self.use_amp and self.device == "cpu":
             self.logger.warning("AMP is enabled but device is CPU. This might be slow.")
 
         self.scaler = GradScaler(device=self.device, enabled=self.use_amp)
@@ -120,7 +126,9 @@ class GANTrainer(BaseTrainer):
         for p in params:
             p.requires_grad_(flag)
 
-    def _train_discriminator_step(self, batch: dict) -> tuple[torch.Tensor, dict, float]:
+    def _train_discriminator_step(
+        self, batch: dict
+    ) -> tuple[torch.Tensor, dict, float]:
         """
         Один optimizer-step для дискриминаторов.
         - fake генерируется без графа (inference_mode)
@@ -130,23 +138,31 @@ class GANTrainer(BaseTrainer):
         self._set_requires_grad_params(self._d_params, True)
         self.optimizer_d.zero_grad(set_to_none=True)
 
-        with autocast(device_type=self.device, dtype=torch.float16, enabled=self.use_amp):
+        with autocast(
+            device_type=self.device, dtype=torch.float16, enabled=self.use_amp
+        ):
             with torch.no_grad():
                 fake_detached = self.generator(batch["mel"])
             assert_same_length(fake_detached, batch["audio"])
 
-            loss_d, loss_d_dict = self._compute_discriminator_loss(batch["audio"], fake_detached)
+            loss_d, loss_d_dict = self._compute_discriminator_loss(
+                batch["audio"], fake_detached
+            )
 
         self.scaler.scale(loss_d).backward()
         self.scaler.unscale_(self.optimizer_d)
 
-        grad_norm_d = self._clip_grad_norm(model=self._d_params, max_norm=self.grad_clip_d)
+        grad_norm_d = self._clip_grad_norm(
+            model=self._d_params, max_norm=self.grad_clip_d
+        )
         self.scaler.step(self.optimizer_d)
         self.scaler.update()
 
         return loss_d, loss_d_dict, float(grad_norm_d)
 
-    def _train_generator_step(self, batch: dict) -> tuple[torch.Tensor, dict, float, torch.Tensor]:
+    def _train_generator_step(
+        self, batch: dict
+    ) -> tuple[torch.Tensor, dict, float, torch.Tensor]:
         """
         Один optimizer-step для генератора.
         - параметры D заморожены (requires_grad=False), но forward D внутри loss'а
@@ -156,16 +172,22 @@ class GANTrainer(BaseTrainer):
         self._set_requires_grad_params(self._d_params, False)
         self.optimizer_g.zero_grad(set_to_none=True)
 
-        with autocast(device_type=self.device, dtype=torch.float16, enabled=self.use_amp):
+        with autocast(
+            device_type=self.device, dtype=torch.float16, enabled=self.use_amp
+        ):
             fake = self.generator(batch["mel"])
             assert_same_length(fake, batch["audio"])
 
-            loss_g, loss_g_dict = self._compute_generator_loss(batch["audio"], fake, batch["mel"])
+            loss_g, loss_g_dict = self._compute_generator_loss(
+                batch["audio"], fake, batch["mel"]
+            )
 
         self.scaler.scale(loss_g).backward()
         self.scaler.unscale_(self.optimizer_g)
 
-        grad_norm_g = self._clip_grad_norm(model=self.generator, max_norm=self.grad_clip_g)
+        grad_norm_g = self._clip_grad_norm(
+            model=self.generator, max_norm=self.grad_clip_g
+        )
         self.scaler.step(self.optimizer_g)
         self.scaler.update()
 
@@ -237,7 +259,12 @@ class GANTrainer(BaseTrainer):
 
                 # шаг D и G
                 loss_d, loss_d_dict, grad_norm_d = self._train_discriminator_step(batch)
-                loss_g, loss_g_dict, grad_norm_g, fake_audio = self._train_generator_step(batch)
+                (
+                    loss_g,
+                    loss_g_dict,
+                    grad_norm_g,
+                    fake_audio,
+                ) = self._train_generator_step(batch)
 
                 # обновление метрик
                 self._update_train_metrics(
@@ -256,12 +283,20 @@ class GANTrainer(BaseTrainer):
 
                 if batch_idx % self.log_step == 0:
                     log_batch = self._make_log_batch(batch, fake_audio)
-                    self._log_step(self.train_metrics, batch_idx, epoch, batch=log_batch, mode="train")
+                    self._log_step(
+                        self.train_metrics,
+                        batch_idx,
+                        epoch,
+                        batch=log_batch,
+                        mode="train",
+                    )
 
-                pbar.set_postfix({
-                    "L_D": f"{loss_d.item():.3f}",
-                    "L_G": f"{loss_g.item():.3f}",
-                })
+                pbar.set_postfix(
+                    {
+                        "L_D": f"{loss_d.item():.3f}",
+                        "L_G": f"{loss_g.item():.3f}",
+                    }
+                )
 
             except RuntimeError as e:
                 if "out of memory" in str(e).lower() and self._handle_oom(batch_idx, e):
@@ -280,7 +315,9 @@ class GANTrainer(BaseTrainer):
         last_batch = None
         if last_batch_gpu is not None and last_fake_gpu is not None:
             last_batch = dict(last_batch_gpu)
-            last_batch["audio_fake"] = last_fake_gpu.float()    # writer сам перенесет на cpu
+            last_batch[
+                "audio_fake"
+            ] = last_fake_gpu.float()  # writer сам перенесет на cpu
 
         self._log_epoch_end(
             self.train_metrics,
@@ -291,7 +328,6 @@ class GANTrainer(BaseTrainer):
         )
 
         return self.train_metrics.result()
-
 
     def _compute_discriminator_loss(self, real_audio, fake_audio):
         """
@@ -333,14 +369,16 @@ class GANTrainer(BaseTrainer):
             disc_outputs_real=real_outs,
             disc_outputs_fake=fake_outs,
             mel=mel,
-            mel_transform=self.mel_transform
+            mel_transform=self.mel_transform,
         )
 
         if isinstance(loss_output, (tuple, list)):
             return loss_output[0], loss_output[1]
         return loss_output, {}
 
-    def process_batch(self, batch: dict[str, Any], metrics: MetricTracker) -> dict[str, Any]:
+    def process_batch(
+        self, batch: dict[str, Any], metrics: MetricTracker
+    ) -> dict[str, Any]:
         """
         Один batch в режиме evaluation/validation.
         - нет backward/step
@@ -355,7 +393,6 @@ class GANTrainer(BaseTrainer):
             d.eval()
 
         with torch.no_grad():
-
             # fake audio
             audio_fake = self.generator(batch["mel"])
 
@@ -363,20 +400,26 @@ class GANTrainer(BaseTrainer):
             audio_real, audio_fake = match_audio_length(batch["audio"], audio_fake)
 
             # val loss D
-            loss_d, loss_d_dict = self._compute_discriminator_loss(audio_real, audio_fake.detach())
+            loss_d, loss_d_dict = self._compute_discriminator_loss(
+                audio_real, audio_fake.detach()
+            )
             metrics.update("loss_d", float(loss_d))
 
             # val loss G
-            loss_g, loss_g_dict = self._compute_generator_loss(audio_real, audio_fake, batch["mel"])
+            loss_g, loss_g_dict = self._compute_generator_loss(
+                audio_real, audio_fake, batch["mel"]
+            )
             metrics.update("loss_g", float(loss_g))
 
             # mel_loss
             if self.mel_transform:
-                af = audio_fake.squeeze(1) if audio_fake.dim() == 3 else audio_fake  # (B, T)
-                mel_fake = self.mel_transform(af) # log-mel
+                af = (
+                    audio_fake.squeeze(1) if audio_fake.dim() == 3 else audio_fake
+                )  # (B, T)
+                mel_fake = self.mel_transform(af)  # log-mel
 
-                mel_real = batch["mel"]          # (B, n_mels, T_max)
-                mel_len = batch["mel_length"]    # (B,)
+                mel_real = batch["mel"]  # (B, n_mels, T_max)
+                mel_len = batch["mel_length"]  # (B,)
 
                 mel_fake, mel_real = match_audio_length(mel_fake, mel_real)
 
@@ -403,7 +446,6 @@ class GANTrainer(BaseTrainer):
                 metrics.update(f"G/{name}", v)
 
         return batch
-
 
     def _log_batch(self, batch_idx: int, batch: dict[str, Any], mode: str = "train"):
         """Логирование аудио и спектрограмм."""
@@ -433,7 +475,9 @@ class GANTrainer(BaseTrainer):
             if mode == "train" or self._last_epoch <= 1:
                 self.writer.add_audio("audio_real", batch["audio"][idx], sample_rate=sr)
         if "audio_fake" in batch:
-            self.writer.add_audio("audio_fake", batch["audio_fake"][idx], sample_rate=sr)
+            self.writer.add_audio(
+                "audio_fake", batch["audio_fake"][idx], sample_rate=sr
+            )
 
         # Логируем спектрограммы
         def log_spec(name, tensor):

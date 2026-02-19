@@ -8,9 +8,14 @@ datasets:
     limit: 8
 
 dataloader:
-  batch_size: 8
-  num_workers: 0
-  pin_memory: true
+  train:
+    batch_size: 8
+    num_workers: 0
+    pin_memory: true
+  val:
+    batch_size: 8
+    num_workers: 0
+    pin_memory: true
 
 trainer:
   n_epochs: 20

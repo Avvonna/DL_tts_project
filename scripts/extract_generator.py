@@ -52,10 +52,25 @@ def extract_generator(input_path: str, output_path: str):
 
     print(f"Успешно сохранено в: {output_file}")
 
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Извлечение весов генератора из полного чекпоинта обучения.")
-    parser.add_argument("-i", "--input", type=str, required=True, help="Путь к исходному .pth файлу (чекпоинту).")
-    parser.add_argument("-o", "--output", type=str, required=True, help="Путь для сохранения .pth файла только с генератором.")
+    parser = argparse.ArgumentParser(
+        description="Извлечение весов генератора из полного чекпоинта обучения."
+    )
+    parser.add_argument(
+        "-i",
+        "--input",
+        type=str,
+        required=True,
+        help="Путь к исходному .pth файлу (чекпоинту).",
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        type=str,
+        required=True,
+        help="Путь для сохранения .pth файла только с генератором.",
+    )
 
     args = parser.parse_args()
 

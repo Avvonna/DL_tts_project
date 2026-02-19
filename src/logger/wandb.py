@@ -52,7 +52,12 @@ class WandBWriter:
             resume_arg = "allow"
             resume_from_arg = None
 
-            if enable_rewind and resume_epoch is not None and run_id is not None and epoch_len is not None:
+            if (
+                enable_rewind
+                and resume_epoch is not None
+                and run_id is not None
+                and epoch_len is not None
+            ):
                 rewind_step = (resume_epoch - 1) * (epoch_len + 1)
                 logger.info(
                     f"Rewinding wandb run {run_id} to step {rewind_step} "

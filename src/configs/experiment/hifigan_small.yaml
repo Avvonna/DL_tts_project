@@ -3,7 +3,7 @@
 # Маленькая версия
 generator:
   upsample_initial_channel: 256   # меньше ширина модели
-  resblock_kernel_sizes: [3, 7, 11] 
+  resblock_kernel_sizes: [3, 7, 11]
   resblock_dilation_sizes: [[1, 3, 5], [1, 3, 5], [1, 3, 5]]
 
 lr_scheduler:
@@ -29,7 +29,7 @@ trainer:
   resume_from: "checkpoint-epoch150.pth"
   grad_clip_g: 10.0
   grad_clip_d: 10.0
-  
+
 dataloader:
   train:
     batch_size: 64

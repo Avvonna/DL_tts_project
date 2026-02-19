@@ -20,11 +20,16 @@ from src.utils.io_utils import abs_path
 
 logger = logging.getLogger("synthesize")
 
+
 def _extract_generator_state(ckpt: object) -> dict:
     """
     Возвращает state_dict генератора
     """
-    if isinstance(ckpt, dict) and "state_dict" in ckpt and isinstance(ckpt["state_dict"], dict):
+    if (
+        isinstance(ckpt, dict)
+        and "state_dict" in ckpt
+        and isinstance(ckpt["state_dict"], dict)
+    ):
         sd = ckpt["state_dict"]
 
         # отдельный под-словарь generator
@@ -33,7 +38,11 @@ def _extract_generator_state(ckpt: object) -> dict:
 
         # плоский state_dict с префиксом generator
         if any(k.startswith("generator.") for k in sd.keys()):
-            return {k[len("generator."):]: v for k, v in sd.items() if k.startswith("generator.")}
+            return {
+                k[len("generator.") :]: v
+                for k, v in sd.items()
+                if k.startswith("generator.")
+            }
 
         # state_dict генератора
         return sd
@@ -42,6 +51,7 @@ def _extract_generator_state(ckpt: object) -> dict:
         return ckpt
 
     raise RuntimeError("Не удалось распознать формат чекпоинта генератора.")
+
 
 @hydra.main(version_base=None, config_path="src/configs", config_name="synthesize")
 def main(cfg: DictConfig) -> None:
@@ -57,16 +67,17 @@ def main(cfg: DictConfig) -> None:
     # Загрузка HiFi-GAN
     logger.info("Загрузка HiFi-GAN...")
     ckpt_path = abs_path(cfg.synthesize.checkpoint_path)
+
     ckpt = torch.load(str(ckpt_path), map_location=device, weights_only=False)
 
     generator = instantiate(cfg.generator).to(device)
 
-    ckpt_path = abs_path(cfg.synthesize.checkpoint_path)
-    ckpt = torch.load(str(ckpt_path), map_location=device, weights_only=False)
+    gen_state = _extract_generator_state(ckpt)
+    generator.load_state_dict(gen_state, strict=True)
 
-    generator.load_state_dict(ckpt, strict=True)
-
-    if cfg.synthesize.get("remove_weight_norm", True) and hasattr(generator, "remove_weight_norm"):
+    if cfg.synthesize.get("remove_weight_norm", True) and hasattr(
+        generator, "remove_weight_norm"
+    ):
         generator.remove_weight_norm()
 
     generator.eval()
@@ -78,7 +89,7 @@ def main(cfg: DictConfig) -> None:
         hop_length=cfg.dataset.hop_length,
         n_mels=cfg.dataset.n_mels,
         f_min=cfg.dataset.f_min,
-        f_max=cfg.dataset.f_max
+        f_max=cfg.dataset.f_max,
     )
     mel_transform = MelSpectrogram(mel_cfg).to(device)
 
@@ -91,7 +102,13 @@ def main(cfg: DictConfig) -> None:
 
     # Датасет
     dataset = instantiate(cfg.dataset)
-    loader = instantiate(cfg.dataloader, dataset=dataset, collate_fn=collate_fn, shuffle=False, drop_last=False)
+    loader = instantiate(
+        cfg.dataloader,
+        dataset=dataset,
+        collate_fn=collate_fn,
+        shuffle=False,
+        drop_last=False,
+    )
 
     out_dir_cfg = cfg.synthesize.get("output_dir", "auto")
     if out_dir_cfg in (None, "auto", "dataset"):
@@ -102,7 +119,7 @@ def main(cfg: DictConfig) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     target_sr = int(cfg.preprocess.audio.sr)
-    save_hf_audio = bool(cfg.synthesize.get("save_hf_audio", True))
+    save_hf = bool(cfg.synthesize.get("save_hf", True))
 
     total_time_inference = 0.0
     total_duration_gen = 0.0
@@ -111,7 +128,9 @@ def main(cfg: DictConfig) -> None:
     resampler = None
 
     with torch.no_grad():
-        for batch_idx, batch in tqdm(enumerate(loader), total=len(loader), desc="Synthesizing"):
+        for batch_idx, batch in tqdm(
+            enumerate(loader), total=len(loader), desc="Synthesizing"
+        ):
             paths = batch.get("audio_path", [])
             texts = batch.get("text", [])
 
@@ -119,7 +138,9 @@ def main(cfg: DictConfig) -> None:
 
             if mode == "full_tts" and acoustic_model:
                 if all((t is None) or (str(t).strip() == "") for t in texts):
-                    raise RuntimeError("FULL_TTS: все тексты пустые. Проверьте папку transcriptions и соответствие имен *.txt к *.wav.")
+                    raise RuntimeError(
+                        "FULL_TTS: все тексты пустые. Проверьте папку transcriptions и соответствие имен *.txt к *.wav."
+                    )
 
                 # текст -> HF Model -> Audio -> Mel
                 mels_list = []
@@ -129,19 +150,21 @@ def main(cfg: DictConfig) -> None:
                         continue
 
                     # Генерируем черновое аудио
-                    wav_am, am_sr = acoustic_model.generate_audio(text) # (1, T_raw)
+                    wav_am, am_sr = acoustic_model.generate_audio(text)  # (1, T_raw)
 
                     # Ресемплим под частоту HiFi-GAN
                     if am_sr != target_sr:
                         if resampler is None:
-                            resampler = torchaudio.transforms.Resample(am_sr, target_sr).to(device)
+                            resampler = torchaudio.transforms.Resample(
+                                am_sr, target_sr
+                            ).to(device)
                         wav_am = resampler(wav_am)
 
                     # Извлекаем Mel-спектрограмму
-                    mel = mel_transform(wav_am).squeeze(0) # (n_mels, T)
+                    mel = mel_transform(wav_am).squeeze(0)  # (n_mels, T)
                     mels_list.append(mel)
 
-                    if save_hf_audio:
+                    if save_hf:
                         stem = f"sample_{batch_idx:06d}"
                         if isinstance(paths, list) and len(paths) > 0:
                             stem = Path(paths[0]).stem
@@ -149,14 +172,18 @@ def main(cfg: DictConfig) -> None:
                         sf.write(
                             str(hf_path),
                             wav_am.detach().cpu().squeeze().numpy(),
-                            target_sr
+                            target_sr,
                         )
 
                 # Собираем батч
                 if any(m is not None for m in mels_list):
                     mels_T = [m.transpose(0, 1) for m in mels_list if m is not None]
-                    mel_padded = pad_sequence(mels_T, batch_first=True, padding_value=-11.5129)
-                    mel_to_vocode = mel_padded.transpose(1, 2).to(device) # (B, n_mels, T)
+                    mel_padded = pad_sequence(
+                        mels_T, batch_first=True, padding_value=-11.5129
+                    )
+                    mel_to_vocode = mel_padded.transpose(1, 2).to(
+                        device
+                    )  # (B, n_mels, T)
                 else:
                     continue
 
@@ -168,7 +195,7 @@ def main(cfg: DictConfig) -> None:
 
             # Инференс HiFi-GAN
             t0 = time.perf_counter()
-            audio_fake = generator(mel_to_vocode) # (B, 1, T)
+            audio_fake = generator(mel_to_vocode)  # (B, 1, T)
             inference_time = time.perf_counter() - t0
 
             bsz = int(audio_fake.size(0))
@@ -179,12 +206,27 @@ def main(cfg: DictConfig) -> None:
 
             audio_fake = audio_fake.detach().cpu()
 
+            save_gt = bool(cfg.synthesize.get("save_gt", False))
+
             # Сохранение
             bsz = int(audio_fake.size(0))
             for i in range(bsz):
                 stem = f"sample_{batch_idx:06d}_{i}"
                 if i < len(paths):
                     stem = Path(paths[i]).stem
+
+                # GT (только в resynthesis)
+                if mode == "resynthesis" and save_gt and "audio" in batch:
+                    gt_len = None
+                    if "audio_length" in batch:
+                        gt_len = int(batch["audio_length"][i].item())
+                    gt_audio = batch["audio"][i].detach().cpu()  # (1, T)
+                    gt_audio = gt_audio.squeeze(0)
+                    if gt_len is not None:
+                        gt_audio = gt_audio[:gt_len]
+                    sf.write(
+                        str(out_dir / f"{stem}_gt.wav"), gt_audio.numpy(), target_sr
+                    )
 
                 gen_path = out_dir / f"{stem}_{mode}.wav"
                 sf.write(str(gen_path), audio_fake[i].squeeze().numpy(), target_sr)
@@ -195,6 +237,7 @@ def main(cfg: DictConfig) -> None:
         logger.info(f"Режим: {mode}")
         logger.info(f"RTF: {rtf:.4f}")
         logger.info(f"Сохранено в: {out_dir}")
+
 
 if __name__ == "__main__":
     main()

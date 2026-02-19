@@ -37,7 +37,7 @@ def main(config):
         project_config,
         resume_epoch=resume_epoch,
         epoch_len=epoch_len,
-        rewind=config.trainer.get("rewind", False)
+        rewind=config.trainer.get("rewind", False),
     )
 
     # build model architecture
