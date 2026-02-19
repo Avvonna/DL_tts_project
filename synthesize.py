@@ -20,6 +20,46 @@ from src.utils.io_utils import abs_path
 
 logger = logging.getLogger("synthesize")
 
+def _extract_generator_state(ckpt: object) -> dict:
+    """
+    Возвращает state_dict генератора
+    """
+    if isinstance(ckpt, dict) and "state_dict" in ckpt and isinstance(ckpt["state_dict"], dict):
+        sd = ckpt["state_dict"]
+
+        # отдельный под-словарь generator
+        if "generator" in sd and isinstance(sd["generator"], dict):
+            return sd["generator"]
+
+        # плоский state_dict с префиксом generator
+        if any(k.startswith("generator.") for k in sd.keys()):
+            return {k[len("generator."):]: v for k, v in sd.items() if k.startswith("generator.")}
+
+        # state_dict генератора
+        return sd
+
+    if isinstance(ckpt, dict):
+        return ckpt
+
+    raise RuntimeError("Не удалось распознать формат чекпоинта генератора.")
+
+def _convert_weightnorm_keys_to_parametrizations(gen_sd: dict) -> dict:
+    """
+    Конвертирует старые ключи weight_norm (weight_g/weight_v) в формат
+    torch.nn.utils.parametrizations.weight_norm (original0/original1)
+    """
+    has_wg = any(k.endswith(".weight_g") for k in gen_sd.keys())
+    has_wv = any(k.endswith(".weight_v") for k in gen_sd.keys())
+    if not (has_wg or has_wv):
+        return gen_sd
+
+    out = {}
+    for k, v in gen_sd.items():
+        k2 = k
+        k2 = k2.replace(".weight_g", ".parametrizations.weight.original0")
+        k2 = k2.replace(".weight_v", ".parametrizations.weight.original1")
+        out[k2] = v
+    return out
 
 @hydra.main(version_base=None, config_path="src/configs", config_name="synthesize")
 def main(cfg: DictConfig) -> None:
@@ -41,16 +81,16 @@ def main(cfg: DictConfig) -> None:
 
     ckpt_path = abs_path(cfg.synthesize.checkpoint_path)
     ckpt = torch.load(str(ckpt_path), map_location=device, weights_only=False)
-
-    if isinstance(ckpt, dict) and "state_dict" in ckpt and "generator" in ckpt["state_dict"]:
-        gen_state = ckpt["state_dict"]["generator"]
-    else:
-        gen_state = ckpt
+    gen_state = _extract_generator_state(ckpt)
+    convert_wn = bool(cfg.synthesize.get("convert_weightnorm_keys", False))
+    if convert_wn:
+        gen_state = _convert_weightnorm_keys_to_parametrizations(gen_state)
 
     generator.load_state_dict(gen_state, strict=True)
 
     if cfg.synthesize.get("remove_weight_norm", True) and hasattr(generator, "remove_weight_norm"):
         generator.remove_weight_norm()
+
     generator.eval()
 
     # Инициализация mel-трансформа
