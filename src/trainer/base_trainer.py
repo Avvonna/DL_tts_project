@@ -207,10 +207,9 @@ class BaseTrainer(ABC):
         """
         try:
             self._train_process()
-        except KeyboardInterrupt as e:
+        except KeyboardInterrupt:
             self.logger.info("Saving model on keyboard interrupt")
             self._save_checkpoint(self._last_epoch, save_best=False)
-            raise e
 
     def _train_process(self):
         """

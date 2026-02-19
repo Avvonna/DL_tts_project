@@ -14,7 +14,7 @@ lr_scheduler:
 
 mel_spec_transform:
   config:
-    f_max: null   # пусть видит все частоты
+    f_max: 11025.0   # пусть видит больше частот
     f_min: 0.0
 
 writer:
@@ -23,10 +23,12 @@ writer:
 trainer:
   use_amp: true
   n_epochs: 1000   # ~ 1000 * (22000 * 0.98 / 64) ~ 340k шагов
-  log_step: 100
+  log_step: 50
   save_period: 10
   seed: 42
-  resume_from: null
+  resume_from: "checkpoint-epoch150.pth"
+  grad_clip_g: 10.0
+  grad_clip_d: 10.0
   
 dataloader:
   train:

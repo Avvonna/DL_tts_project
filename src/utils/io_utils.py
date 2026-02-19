@@ -30,3 +30,7 @@ def write_json(content, fname):
     fname = Path(fname)
     with fname.open("wt") as handle:
         json.dump(content, handle, indent=4, sort_keys=False)
+
+def abs_path(p: str) -> Path:
+    path = Path(p)
+    return path if path.is_absolute() else (ROOT_PATH / path).resolve()

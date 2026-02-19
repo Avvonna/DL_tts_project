@@ -203,7 +203,7 @@ class GANTrainer(BaseTrainer):
     def _make_log_batch(self, batch: dict, fake_audio: torch.Tensor) -> dict:
         """Формирует батч для логирования."""
         out = dict(batch)
-        out["audio_fake"] = fake_audio.detach().cpu()
+        out["audio_fake"] = fake_audio.detach().float().cpu()
         return out
 
     @log_examples_per_sec(
@@ -280,7 +280,7 @@ class GANTrainer(BaseTrainer):
         last_batch = None
         if last_batch_gpu is not None and last_fake_gpu is not None:
             last_batch = dict(last_batch_gpu)
-            last_batch["audio_fake"] = last_fake_gpu  # writer сам перенесет на cpu
+            last_batch["audio_fake"] = last_fake_gpu.float()    # writer сам перенесет на cpu
 
         self._log_epoch_end(
             self.train_metrics,
@@ -389,11 +389,11 @@ class GANTrainer(BaseTrainer):
                 metrics.update("mel_loss", float(val_mel_loss))
 
                 # для логов
-                batch["mel_fake"] = mel_fake.detach().cpu()
-                batch["mel_real"] = mel_real.detach().cpu()
+                batch["mel_fake"] = mel_fake.detach().float().cpu()
+                batch["mel_real"] = mel_real.detach().float().cpu()
 
             # для логов
-            batch["audio_fake"] = audio_fake.detach().cpu()
+            batch["audio_fake"] = audio_fake.detach().float().cpu()
 
             for name, val in loss_d_dict.items():
                 v = float(val) if torch.is_tensor(val) else float(val)

@@ -177,3 +177,18 @@ def setup_saving_and_logging(config):
     logger.setLevel(logging.DEBUG)
 
     return logger, resume_epoch
+
+def configure_logging_for_inference() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="[%(asctime)s][%(name)s][%(levelname)s] - %(message)s",
+        force=True,
+    )
+
+    # глушим лишние зависимости
+    logging.getLogger("httpx").setLevel(logging.ERROR)
+    logging.getLogger("httpcore").setLevel(logging.ERROR)
+    logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
+    logging.getLogger("huggingface_hub.utils._http").setLevel(logging.ERROR)
+    logging.getLogger("transformers").setLevel(logging.ERROR)
+    logging.getLogger("urllib3").setLevel(logging.ERROR)

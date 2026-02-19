@@ -138,14 +138,14 @@ writer:
 
 # Trainer
 trainer:
-  use_amp: false
+  use_amp: true
   log_step: 200
   n_epochs: 3100
   epoch_len: null
   device_tensors: ["mel", "audio"]
-  resume_from: "checkpoint-epoch315.pth"
+  resume_from: "checkpoint-epoch510.pth"
   rewind: false
-  reset_optimizer: false
+  reset_optimizer: true
   device: auto
   override: true
   monitor: "min val_mel_loss"
@@ -153,8 +153,8 @@ trainer:
   early_stop: 100
   save_dir: "saved"
   seed: 42
-  grad_clip_g: null
-  grad_clip_d: null
+  grad_clip_g: 10.0
+  grad_clip_d: 10.0
 
 # Preprocess
 preprocess:

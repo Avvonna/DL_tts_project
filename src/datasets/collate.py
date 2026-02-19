@@ -21,6 +21,8 @@ def collate_fn(dataset_items: list[dict]) -> dict:
     audios = []
     audio_lengths = []
     paths = []
+    texts = []
+    utt_ids = []
 
     # Флаг наличия Mel
     has_mel = len(dataset_items) > 0 and "mel" in dataset_items[0]
@@ -42,9 +44,9 @@ def collate_fn(dataset_items: list[dict]) -> dict:
             mels_t_first.append(mel)
             mel_lengths.append(mel.shape[0])
 
-        # Пути
-        if "audio_path" in item:
-            paths.append(item["audio_path"])
+        paths.append(item.get("audio_path", ""))
+        texts.append(item.get("text", ""))
+        utt_ids.append(item.get("utt_id", ""))
 
     batch = {}
 
@@ -65,7 +67,8 @@ def collate_fn(dataset_items: list[dict]) -> dict:
         ).contiguous()  # Разворот (Batch, n_mels, T_max)
         batch["mel_length"] = torch.tensor(mel_lengths, dtype=torch.long)
 
-    if paths:
-        batch["audio_path"] = paths
+    batch["text"] = texts
+    batch["audio_path"] = paths
+    batch["utt_id"] = utt_ids
 
     return batch
