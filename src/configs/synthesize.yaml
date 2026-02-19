@@ -41,7 +41,6 @@ synthesize:
   output_dir: ${dataset.data_dir}/outputs
   remove_weight_norm: true
   save_hf_audio: true
-  convert_weightnorm_keys: false
   
   # mode: "resynthesis" (Audio -> Mel -> Vocoder)
   # mode: "full_tts"    (Text -> MMS -> Audio_temp -> Mel -> Vocoder)
